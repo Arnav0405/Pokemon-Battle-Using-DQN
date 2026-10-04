@@ -14,6 +14,23 @@ dependencies = [
 [project.scripts]
 lab-ca = "lab_ca:main"
 
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "pytest-timeout>=2.3",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "integration: needs the local Showdown server (scripts/showdown_start.sh)",
+]
+addopts = "-ra"
+# Integration tests talk to the local Showdown server; a server-side stall should fail loudly
+# with a traceback instead of hanging the run.
+timeout = 240
+timeout_method = "thread"
+
 [build-system]
 requires = ["uv_build>=0.12.18,<0.13.0"]
 build-backend = "uv_build"

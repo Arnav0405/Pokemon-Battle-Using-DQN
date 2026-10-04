@@ -33,11 +33,13 @@ if the custom policy fights SB3.
 Spec §2/§4/§10 updated to match poke-env 0.16.1 (embed_battle, two-agent env + `SingleAgentWrapper`,
 `get_action_mask`, Python 3.13).
 
-## Phase 1 — Environment wrapper
+## Phase 1 — Environment wrapper — DONE
 
-- [ ] `src/lab_ca/teams.py`: fixed canon-style team + packed-team validity check — artifact: green `tests/test_teams.py`
-- [ ] `src/lab_ca/env.py`: `SinglesEnv` subclass (`embed_battle` + shaped `calc_reward` via `reward_computing_helper`, action mask exposed in the observation dict) + `opponent.py` (`RandomOpponent` / `HeuristicOpponent` with fixed teams) — artifact: `tests/test_env.py` shows sane observation shapes, reward range and mask correctness
-- [ ] One full training-style episode runs end-to-end against the Heuristic opponent (`SingleAgentWrapper`: reset → step → done) — artifact: episode log in `tests/`
+- [x] `src/lab_ca/teams.py`: fixed canon team + packed-team validity check — artifact: green `tests/test_teams.py` (4 tests: roster shape, pack/parse round-trip, engine accepts the packed team for both `gen9customgame` and `gen9ou`)
+- [x] `src/lab_ca/env.py`: `SinglesEnv` subclass (`embed_battle` 33-feature vector + shaped `calc_reward` via `reward_computing_helper`, action mask in the observation dict) + `src/lab_ca/opponent.py` (`Random`/`Heuristic` baselines, each on a fixed team) — artifact: `tests/test_env.py` (shape, bounds, finiteness, mask legality, reward range, plain-`int` action coercion, env reuse across episodes) + `tests/test_opponent.py`
+- [x] One full training-style episode end-to-end against the Heuristic opponent (`SingleAgentWrapper`: reset → step → done) — artifact: `runs/phase1_smoke/episodes.jsonl` (26 steps, terminal reward −32.2, `win=false`; masked-random play loses to the type-aware baseline, as expected pre-training)
+- [x] (added during the phase) teardown hardening so a failed episode cannot wedge the process: `close()`/`reset_battles()` no longer touch poke-env's racy cap-1 queue drains — artifact: `docs/poke-env-0.16.1-gotchas.md`, 13/13 tests green in ~15 s
+- Baseline sanity: the type-aware heuristic beats the random baseline 8–0 over 8 battles — artifact: `tests/test_opponent.py::test_heuristic_beats_random_over_a_short_series`
 
 ## Phase 2 — Training + logging
 
