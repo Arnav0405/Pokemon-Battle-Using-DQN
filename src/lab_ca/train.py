@@ -132,6 +132,11 @@ class TrainingConfig:
     exploration_fraction: float = 0.1
     exploration_initial_eps: float = 1.0
     exploration_final_eps: float = 0.02
+    net_arch: tuple = (64, 64)  # Q-network hidden layers; SB3's default for DQN
+
+    def updates_per_env_step(self) -> float:
+        """Gradient updates performed per environment step -- the knob this project tuned."""
+        return self.gradient_steps / max(1, self.train_freq)
 
 
 def make_run_dir(runs_root: Path, run_name: str) -> Path:
@@ -208,6 +213,7 @@ def train(config: TrainingConfig, runs_root: Path = Path("runs")) -> Path:
         exploration_fraction=config.exploration_fraction,
         exploration_initial_eps=config.exploration_initial_eps,
         exploration_final_eps=config.exploration_final_eps,
+        policy_kwargs={"net_arch": list(config.net_arch)},
     )
 
     metrics = EpisodeMetricsCallback(run_dir, config.opponent, verbose=1)
@@ -239,6 +245,17 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--checkpoint-every", type=int, default=1_000, help="steps")
     parser.add_argument("--runs-root", default="runs")
     parser.add_argument("--device", default="cpu")
+    # Hyperparameter overrides. Defaults are the SB3 ones; the Phase-3 comparison runs set these.
+    parser.add_argument("--net-arch", default="64,64", help="Q-network hidden layers, e.g. 256,256")
+    parser.add_argument("--train-freq", type=int, default=4, help="env steps between updates")
+    parser.add_argument("--gradient-steps", type=int, default=1, help="updates per train_freq block")
+    parser.add_argument("--batch-size", type=int, default=32)
+    parser.add_argument("--buffer-size", type=int, default=1_000_000)
+    parser.add_argument("--learning-rate", type=float, default=1e-4)
+    parser.add_argument("--gamma", type=float, default=0.99)
+    parser.add_argument("--target-update-interval", type=int, default=10_000, help="env steps")
+    parser.add_argument("--exploration-fraction", type=float, default=0.1)
+    parser.add_argument("--exploration-final-eps", type=float, default=0.02)
     return parser
 
 
@@ -251,6 +268,16 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         run_name=args.run_name,
         checkpoint_every_steps=args.checkpoint_every,
         device=args.device,
+        net_arch=tuple(int(part) for part in args.net_arch.split(",") if part.strip()),
+        train_freq=args.train_freq,
+        gradient_steps=args.gradient_steps,
+        batch_size=args.batch_size,
+        buffer_size=args.buffer_size,
+        learning_rate=args.learning_rate,
+        gamma=args.gamma,
+        target_update_interval=args.target_update_interval,
+        exploration_fraction=args.exploration_fraction,
+        exploration_final_eps=args.exploration_final_eps,
     )
     train(config, runs_root=Path(args.runs_root))
     return 0

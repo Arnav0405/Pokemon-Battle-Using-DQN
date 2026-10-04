@@ -11,9 +11,44 @@ from pathlib import Path
 
 import pytest
 
+from lab_ca import train as train_module
 from lab_ca.train import EPISODE_FIELDS, TrainingConfig, train
 
 TRAIN_STEPS = 300
+
+
+def test_cli_flags_reach_the_training_config(monkeypatch) -> None:
+    """The comparison runs are only interpretable if the overrides land in the config dump.
+
+    ``run_config.json`` is written from this dataclass, so this is the path that makes an
+    "A vs B, one knob changed" claim checkable after the fact.
+    """
+    captured = {}
+
+    def fake_train(config, runs_root=Path("runs")):
+        captured["config"] = config
+        return runs_root
+
+    monkeypatch.setattr(train_module, "train", fake_train)
+    exit_code = train_module.main([
+        "--timesteps", "10", "--run-name", "x",
+        "--train-freq", "1", "--gradient-steps", "4", "--batch-size", "128",
+        "--target-update-interval", "1000", "--net-arch", "128,128",
+        "--exploration-fraction", "0.4", "--exploration-final-eps", "0.1",
+    ])
+    assert exit_code == 0
+    config = captured["config"]
+    assert config.updates_per_env_step() == 4.0  # 16x the SB3 default of 0.25
+    assert config.batch_size == 128
+    assert config.target_update_interval == 1000
+    assert config.net_arch == (128, 128)
+    assert config.exploration_fraction == 0.4
+    assert config.exploration_final_eps == 0.1
+
+
+def test_default_config_matches_sb3_defaults() -> None:
+    """The documented default is the SB3 default: 1 update per 4 env steps."""
+    assert TrainingConfig().updates_per_env_step() == 0.25
 
 
 @pytest.mark.integration
@@ -25,6 +60,11 @@ def test_short_training_run_writes_the_contract(server: None, tmp_path: Path) ->
             seed=0,
             run_name="test_run",
             checkpoint_every_steps=200,
+            # a non-default update budget, so the plumbing is exercised on the real path too
+            train_freq=1,
+            gradient_steps=4,
+            batch_size=128,
+            target_update_interval=1000,
         ),
         runs_root=tmp_path,
     )
@@ -53,3 +93,10 @@ def test_short_training_run_writes_the_contract(server: None, tmp_path: Path) ->
     csv_lines = (run_dir / "episodes.csv").read_text(encoding="utf-8").splitlines()
     assert csv_lines[0].split(",") == list(EPISODE_FIELDS)
     assert len(csv_lines) == len(rows) + 1, "CSV mirror and JSONL disagree on episode count"
+
+    config = json.loads((run_dir / "run_config.json").read_text(encoding="utf-8"))["config"]
+    assert config["train_freq"] == 1
+    assert config["gradient_steps"] == 4
+    assert config["batch_size"] == 128
+    assert config["target_update_interval"] == 1000
+    assert config["net_arch"] == [64, 64]
