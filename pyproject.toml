@@ -19,6 +19,9 @@ dependencies = [
     "seaborn>=0.13",
     "plotly>=6",
     "pandas>=2",
+    # Phase 3/4 statistics: Welch t-tests and CIs on win rates across seeds, in the sweep
+    # analysis and the Phase-4 evaluation. Nothing in the training path needs it.
+    "scipy>=1.13",
 ]
 
 [project.scripts]

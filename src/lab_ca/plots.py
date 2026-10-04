@@ -684,13 +684,13 @@ def aggregate_seaborn(series: Dict[str, Dict[str, Any]], table: Dict[str, Any]) 
     for index, (label, entry) in enumerate(series.items()):
         color = COMPARISON_COLORS[index % len(COMPARISON_COLORS)]
         axes[0].fill_between(entry["episodes"], entry["win_rate_min"], entry["win_rate_max"],
-                             color=color, alpha=0.18, linewidth=0)
+                             color=color, alpha=0.24, linewidth=0)
         handle = axes[0].plot(entry["episodes"], entry["win_rate_mean"], color=color,
                               linewidth=2.8, label=_aggregate_legend(label, entry, table))[0]
         handles.append(handle)
         labels.append(_aggregate_legend(label, entry, table))
         axes[1].fill_between(entry["episodes"], entry["reward_min"], entry["reward_max"],
-                             color=color, alpha=0.15, linewidth=0)
+                             color=color, alpha=0.20, linewidth=0)
         axes[1].plot(entry["episodes"], entry["reward_mean"], color=color, linewidth=2.2)
 
     parity = axes[0].axhline(EVEN_MATCH_RATE, color="0.45", linestyle=(0, (4, 3)), linewidth=1.3)

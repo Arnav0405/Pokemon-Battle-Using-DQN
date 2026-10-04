@@ -122,7 +122,48 @@ The loop is server-bound (5.29 ms per env step) while one gradient update on the
   these are training-time win rates (ε = 0.02, moving policy), not the frozen-policy evaluation of
   Phase 4. Full write-up in `runs/p3b_100k/notes.md`.
 
+### Phase 3, tier 1b — seed sweep: the update budget is confirmed, capacity is rejected
+
+Nine runs (3 arms × 3 seeds, 100 k steps each, 100 k steps ~6/14/17.5 min per arm).
+Artifacts: `runs/sweep_notes.md` (full tables + caveats), `runs/sweep_aggregate.{png,html,json}`,
+`spikes/003-sweep-stats/arm_stats.py`, `scripts/run_seed_sweep.sh`.
+
+| Arm | mean final-200 (3 seeds) | seeds | spread |
+|---|---|---|---|
+| A defaults | 51.3 % | 40.5, 56.0, 57.5 | 17.0 pp |
+| **B 16× updates** | **73.5 %** | 67.0, 76.0, 77.5 | 10.5 pp |
+| C B + `[256,256]` | 49.2 % | 27.5, 41.5, 78.5 | **51.0 pp** |
+
+- **B confirmed:** +22.2 pp over A, and the arms **completely separate** (A's best seed 57.5 % < B's
+  worst 67.0 %). Welch t = −3.49 (df 3.3, p = 0.034); the exact permutation test can only reach
+  **p = 0.10** at 3+3 runs — that *is* the ceiling for this sample size, and complete separation is
+  the most extreme outcome available. B also learns earlier (whole-run average 60.6–68.0 % vs A's
+  32.8–45.0 %) with shorter episodes (24.8–26.2 vs 27.4–28.7 steps).
+- **C rejected:** mean indistinguishable from plain defaults (Welch p = 0.90) and 24 pp below B, with a
+  **51 pp spread** — one seed beat every B run, another fell below every A run. Capacity + 16× updates
+  is a lottery, and its episodes are the longest (28.5–31.0 steps). Checked rather than assumed: the
+  TD loss shows **no divergence** in C (first-half ≈1.5, last-half ≈1.9, max ≈2.6, comparable to B —
+  and arm A is the one with the big spikes at max ≈5.1–5.9), so the honest statement is
+  "higher-variance, no mean benefit", not "capacity diverges".
+- Convergence: one run per arm declared it (A-1 @ 3080, B-2 @ 3567, C-1 @ 3271); the arms differ by
+  *level*, not by whether they settle.
+- **Decision:** adopt B and stop tuning the architecture. Remaining headroom is the observation (no
+  speed order, no revealed opponent bench ⇒ the six switch actions are nearly blind), which changes
+  the observation interface and therefore needs its own spec. Extra compute is better spent on 200 k
+  steps of B than on a wider net.
+- One-seed screens would have misled here: C's seed 0 alone reads "capacity hurts" (41.5 %), seed 1
+  alone reads "capacity is the best arm" (78.5 %). The spread is the finding.
+- New dependency: `scipy>=1.13` (statistics only — Welch tests in the sweep analysis and CIs in
+  Phase 4; nothing in the training path imports it).
+
 ## Phase 4 — Evaluation
+
+Checkpoint to evaluate: **arm B** (16× update budget, `[64,64]`, batch 128, target 1 000) is the
+adopted training config — see the tier 1b result in Phase 3. Evaluate **all three B seeds**
+(`p3b_100k`, `sweep_b_seed1`, `sweep_b_seed2`) if the budget allows: the 10.5 pp across-seed spread
+is itself a report number, and a single-seed evaluation would hide it. `sweep_b_seed1` is the
+strongest single checkpoint (77.5 % final-200). Do not evaluate arm C — it was rejected for
+variance, not for mean.
 
 Two passes, because parallel metrics and watchable battles pull in opposite directions (you can't spectate 8 battles at once):
 
