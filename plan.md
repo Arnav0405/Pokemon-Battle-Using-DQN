@@ -22,13 +22,16 @@ Rule: tick a box only when its verification artifact exists on disk. Commit at p
 | Python 3.11 | `pyproject.toml` declares `>=3.13`; running 3.13.7 |
 | "state: poke-env's fixed-length float vector — use as-is" | must be written by hand |
 
-## Open decision before Phase 2 (algorithm × masking)
+## Masking decision (settled 2026-10-04)
 
-SB3 core `DQN` has no action masking and sb3-contrib has **no `MaskableDQN`** (only `MaskablePPO`;
-poke-env's own example uses PPO + a masked actor-critic policy). Keeping the spec's pinned DQN needs a
-custom masked `DQNPolicy` that applies `action_mask` to the Q-values (masks both the greedy action and
-the TD target's `max`). Alternative: switch to `MaskablePPO` (off-the-shelf, but not DQN).
-**Decision needed from Arnav before Phase 2.**
+SB3 core `DQN` has no action masking and sb3-contrib has **no `MaskableDQN`** (only `MaskablePPO`).
+**Decision: keep DQN** and add a small custom policy that masks the Q-values with the `action_mask`
+carried in the observation dict — applied to the online and target nets, so it masks both the greedy
+action and the TD target's `max`. Implement in Phase 2 (`train.py`); fall back to `MaskablePPO` only
+if the custom policy fights SB3.
+
+Spec §2/§4/§10 updated to match poke-env 0.16.1 (embed_battle, two-agent env + `SingleAgentWrapper`,
+`get_action_mask`, Python 3.13).
 
 ## Phase 1 — Environment wrapper
 
