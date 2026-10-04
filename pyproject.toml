@@ -13,6 +13,12 @@ dependencies = [
     # want: the training bottleneck is the Showdown simulation, not the MLP.
     "stable-baselines3==2.9.0",
     "torch>=2.8,<3",
+    # Phase 3/5 graphs. Declared here (not inherited from the workspace's other members) so a
+    # run of this repo is reproducible from this package alone: seaborn for the static report
+    # PNGs, plotly for the interactive HTML.
+    "seaborn>=0.13",
+    "plotly>=6",
+    "pandas>=2",
 ]
 
 [project.scripts]

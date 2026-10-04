@@ -63,18 +63,33 @@ Verified along the way: 70 episodes ran on **one reused env** (no teardown stall
 `EnvironmentError` between episodes), and the env never received an illegal action — with
 `strict=True` that would have raised immediately.
 
-## Phase 3 — First learning curves
+## Phase 3 — First learning curves — DONE
 
-- [ ] Initial graphs from a partial run; reward rises, win rate climbs — artifact: `runs/<run>/curve_check.png`
-- [ ] Hyperparameters adjusted only if curves are flat/noisy; changes noted — artifact: note in run dir
+- [x] Initial graphs from a partial run; reward rises, win rate climbs — artifact: `runs/p3_100k/curve_check.png` (+ `curve_check.html`, interactive) and `metrics.json`
+- [x] Hyperparameters adjusted only if curves are flat/noisy; changes noted — artifact: `runs/p3_100k/notes.md` — **nothing was tuned**: SB3 2.9 defaults kept, because the curves are neither flat nor degenerate (pre-run worry that `target_update_interval=10000` would leave the target net stale did not materialise: ~10 syncs over 100 k steps)
+- Result: 100 k steps / 3650 episodes. Win rate 2.0 % over the first 100 episodes → 53.0 % over the last 100 → **57.5 % in the final 200** against a parity of 50 %; average reward per episode −41.6 → ≈ +7; 0 truncated battles. **Convergence "not reached"** (rolling win rate still drifting up at episode 3650), noted in `notes.md` as the reason Phase 5 may want a longer final run (~9 min per 100 k steps)
+- [x] `src/lab_ca/plots.py` written here (Phase 5 reuses it): `compute_metrics` (spec §6, incl. the convergence rule) plus the three curves rendered twice — seaborn → PNG, plotly → interactive HTML; `--only reward|success|steps` and `--out-dir` for Phase 5's `report_assets`
+- [x] Figure QA by a second vision model (opencode `fledge-alpha-free`), two passes per Arnav's review rule — first pass caught a missing per-episode trace and unreadable raw data (both fixed), second pass: report-ready
 
 ## Phase 4 — Evaluation
 
-- [ ] `src/lab_ca/evaluate.py`: load checkpoint, N battles vs Random and vs Heuristic — artifact: `runs/<run>/eval.json`
+Two passes, because parallel metrics and watchable battles pull in opposite directions (you can't spectate 8 battles at once):
+
+**Pass 1 — metrics (parallel, unwatched)**
+- [ ] `src/lab_ca/evaluate.py`: load checkpoint, run N battles vs Random and vs Heuristic at `max_concurrent_battles=8`, aggregate win rates — artifact: `runs/<run>/eval.json`
 - [ ] Evaluation win rates clearly above the random baseline — artifact: `runs/<run>/eval.json`
+
+**Pass 2 — watchable demo (sequential, recorded locally)**
+- [ ] Demo mode in `evaluate.py` (`--demo`): a handful of battles at `max_concurrent_battles=1` so exactly one battle is live at a time, `save_replays` enabled, recognizable agent username — artifact: `runs/<run>/demo/` replay files saved **locally** (no upload to the public replay service)
+- [ ] Live spectate path verified: with the demo running, the single in-progress battle is watchable at `http://localhost:8000` — artifact: note confirming spectate works against the local server
+- [ ] Local replay capture works against the `--no-security` server (verify whether the replay endpoint saves locally; if the hosted-upload path is unreachable, fall back to saving the battle log + a screen capture instead) — artifact: saved local replay/log file in `runs/<run>/demo/`
+- [ ] Replay file paths recorded into `eval.json` so the report links a few concrete example games — artifact: `runs/<run>/eval.json` gains a `demo_replays` list
 
 ## Phase 5 — Report assets
 
 - [ ] `src/lab_ca/plots.py` renders all three graphs + `metrics.json` — artifact: `report_assets/*.png`, `report_assets/metrics.json`
+  (module already written in Phase 3: `--out-dir report_assets` is all this needs; consider also
+  emitting the three curves as separate figures via `--only reward|success|steps`, plus their
+  `.html` twins)
 - [ ] Graph sanity pass (axes labelled, raw + smoothed, no truncated series) — artifact: review note
 - [ ] Cleanup pass: delete `spikes/000-environment-smoke/`, README documents reproducing a run — artifact: final commit
