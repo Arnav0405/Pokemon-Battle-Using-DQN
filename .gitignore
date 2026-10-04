@@ -1,0 +1,13 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+
+# Local Pokémon Showdown server (regenerable: scripts/showdown_setup.sh)
+showdown/
+
+# Training artifacts (regenerable from scripts, not deliverable)
+runs/
+
+# OS / editor
+.DS_Store

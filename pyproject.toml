@@ -7,7 +7,9 @@ authors = [
     { name = "arnav0405", email = "arnavwaghdhare@gmail.com" }
 ]
 requires-python = ">=3.13"
-dependencies = []
+dependencies = [
+    "poke-env==0.16.1",
+]
 
 [project.scripts]
 lab-ca = "lab_ca:main"
