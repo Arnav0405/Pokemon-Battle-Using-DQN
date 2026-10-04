@@ -546,6 +546,250 @@ def compare(
     return written
 
 
+AGGREGATE_WINDOW = 50  # episodes per aggregated point (non-overlapping: independent blocks)
+
+
+def config_signature(run_dir: Path) -> str:
+    """Label a run by the training config that produced it (read from ``run_config.json``).
+
+    Two runs with the same signature are repeat seeds of the same experiment, which is what makes
+    "is this config better, or was that a lucky seed" answerable.
+
+    Missing keys fall back to the *documented* defaults (``TrainingConfig`` / SB3), because runs
+    from before the override plumbing existed recorded fewer keys -- reconstructing them is
+    truthful where editing the artifact would not be.
+    """
+    defaults = {
+        "train_freq": 4, "gradient_steps": 1, "batch_size": 32,
+        "target_update_interval": 10_000, "net_arch": [64, 64],
+    }
+    path = Path(run_dir) / "run_config.json"
+    if not path.exists():
+        return "unlabelled"
+    recorded = json.loads(path.read_text(encoding="utf-8")).get("config", {})
+    config = {**defaults, **{key: value for key, value in recorded.items() if value is not None}}
+    updates = config["gradient_steps"] / max(1, config["train_freq"])
+    arch = config["net_arch"]
+    arch_text = ",".join(str(width) for width in arch) if isinstance(arch, list) else str(arch)
+    return (
+        f"{updates:g} upd/step · arch [{arch_text}] · batch {config['batch_size']} "
+        f"· target {config['target_update_interval']}"
+    )
+
+
+def aggregate_by_config(run_dirs: Sequence[Path]) -> "Dict[str, List[Path]]":
+    """``{config signature: [run dirs]}``, ordered by signature for a stable legend."""
+    groups: Dict[str, List[Path]] = {}
+    for run_dir in run_dirs:
+        run_dir = Path(run_dir)
+        groups.setdefault(config_signature(run_dir), []).append(run_dir)
+    return dict(sorted(groups.items()))
+
+
+def _block_frame(frame: "pd.DataFrame", window: int) -> "pd.DataFrame":
+    """Collapse one run to non-overlapping ``window``-episode block means.
+
+    Block means (rather than a rolling mean sampled every k episodes) keep the points independent,
+    so the shaded spread across seeds is a real spread rather than a smoothed artefact.
+    """
+    blocks = len(frame) // window
+    if blocks == 0:
+        return frame.iloc[0:0]
+    tail = frame.iloc[: blocks * window].copy()
+    tail["block"] = np.arange(len(tail)) // window
+    grouped = tail.groupby("block").agg(
+        episode=("episode", "last"),
+        win_rate=("win_rate", "mean"),  # already percentage points; equal to the block win rate
+        reward=("cumulative_reward", "mean"),
+        steps=("steps", "mean"),
+    )
+    grouped["epochs"] = window
+    return grouped
+
+
+def aggregate_table(run_dirs: Sequence[Path]) -> Dict[str, Any]:
+    """Per-config summary: every seed's final window, plus the mean/spread across seeds."""
+    table: Dict[str, Any] = {}
+    for label, group in aggregate_by_config(run_dirs).items():
+        metrics = [compute_metrics(load_episodes(run_dir)) for run_dir in group]
+        finals = [100 * item["final_window_success_rate"] for item in metrics]
+        trends = [item["trend_slope_pp_per_1000"] for item in metrics]
+        table[label] = {
+            "runs": [run_dir.name for run_dir in group],
+            "seeds": [
+                json.loads((run_dir / "run_config.json").read_text(encoding="utf-8"))["config"].get("seed")
+                if (run_dir / "run_config.json").exists() else None
+                for run_dir in group
+            ],
+            "seeds_per_config": len(group),
+            "episodes": [item["episodes"] for item in metrics],
+            "final_window_success_rate_pct": {
+                "per_seed": finals,
+                "mean": float(np.mean(finals)),
+                "min": float(np.min(finals)),
+                "max": float(np.max(finals)),
+                "spread": float(np.max(finals) - np.min(finals)),
+            },
+            "late_trend_pp_per_1000": {
+                "per_seed": trends,
+                "mean": float(np.mean(trends)),
+                "min": float(np.min(trends)),
+                "max": float(np.max(trends)),
+            },
+        }
+    return table
+
+
+def aggregate_series(run_dirs: Sequence[Path], window: int = AGGREGATE_WINDOW) -> Dict[str, Dict[str, Any]]:
+    """Per config: the mean block-mean curve across seeds, with the min/max envelope."""
+    series: Dict[str, Dict[str, Any]] = {}
+    for label, group in aggregate_by_config(run_dirs).items():
+        blocks = [_block_frame(load_frame(run_dir), window) for run_dir in group]
+        blocks = [item for item in blocks if len(item)]
+        if not blocks:
+            continue
+        common = min(len(item) for item in blocks)
+        stacked = np.stack([item.iloc[:common]["win_rate"].to_numpy(dtype=float) for item in blocks])
+        rewards = np.stack([item.iloc[:common]["reward"].to_numpy(dtype=float) for item in blocks])
+        series[label] = {
+            "episodes": blocks[0].iloc[:common]["episode"].to_numpy(dtype=float),
+            "win_rate_mean": stacked.mean(axis=0),
+            "win_rate_min": stacked.min(axis=0),
+            "win_rate_max": stacked.max(axis=0),
+            "reward_mean": rewards.mean(axis=0),
+            "reward_min": rewards.min(axis=0),
+            "reward_max": rewards.max(axis=0),
+            "seeds": len(blocks),
+        }
+    return series
+
+
+def _aggregate_legend(label: str, entry: Dict[str, Any], table: Dict[str, Any]) -> str:
+    stats = table.get(label, {}).get("final_window_success_rate_pct", {})
+    if not stats:
+        return label
+    return (
+        f"{label}\n{stats['mean']:.1f}% mean over {len(stats['per_seed'])} seeds "
+        f"({stats['min']:.1f}–{stats['max']:.1f})"
+    )
+
+
+def aggregate_seaborn(series: Dict[str, Dict[str, Any]], table: Dict[str, Any]) -> "plt.Figure":
+    """Mean curve per config across seeds, shaded min-max; the honest read of a small sweep."""
+    sns.set_theme(style="whitegrid", context="talk", palette="deep")
+    sns.set_context("talk", rc={"axes.titlesize": 15, "axes.labelsize": 13, "legend.fontsize": 9})
+
+    figure, axes = plt.subplots(2, 1, figsize=(12, 9.2), sharex=True)
+    handles, labels = [], []
+    for index, (label, entry) in enumerate(series.items()):
+        color = COMPARISON_COLORS[index % len(COMPARISON_COLORS)]
+        axes[0].fill_between(entry["episodes"], entry["win_rate_min"], entry["win_rate_max"],
+                             color=color, alpha=0.18, linewidth=0)
+        handle = axes[0].plot(entry["episodes"], entry["win_rate_mean"], color=color,
+                              linewidth=2.8, label=_aggregate_legend(label, entry, table))[0]
+        handles.append(handle)
+        labels.append(_aggregate_legend(label, entry, table))
+        axes[1].fill_between(entry["episodes"], entry["reward_min"], entry["reward_max"],
+                             color=color, alpha=0.15, linewidth=0)
+        axes[1].plot(entry["episodes"], entry["reward_mean"], color=color, linewidth=2.2)
+
+    parity = axes[0].axhline(EVEN_MATCH_RATE, color="0.45", linestyle=(0, (4, 3)), linewidth=1.3)
+    handles.append(parity)
+    labels.append(f"parity with the opponent ({EVEN_MATCH_RATE:.0f}%)")
+    axes[0].set_ylabel(f"Success rate (%)\nmean over seeds, window {AGGREGATE_WINDOW}")
+    axes[0].set_ylim(-2.0, 102.0)  # fixed 0-100 so panels stay comparable across figures
+    axes[1].axhline(0.0, color="0.45", linestyle=(0, (4, 3)), linewidth=1.3)
+    axes[1].set_ylabel(f"Cumulative reward\nmean over seeds, window {AGGREGATE_WINDOW}")
+    axes[1].set_xlabel("Episode   (one episode = one battle)")
+    for axis in axes:
+        axis.margins(x=0.01)
+
+    figure.legend(handles, labels, loc="upper left", bbox_to_anchor=(0.01, 0.885), ncol=1,
+                  framealpha=0.95, fontsize=9.5)
+    figure.suptitle(
+        "Seed sweep — mean curve per config (shaded: min–max across seeds)\n"
+        "overlapping envelopes mean the configs are not separated by this many seeds; "
+        "curves end where a config's runs ran out of episodes",
+        fontsize=13, y=0.98,
+    )
+    figure.tight_layout(rect=(0, 0, 1, 0.79))
+    return figure
+
+
+def aggregate_plotly(series: Dict[str, Dict[str, Any]], table: Dict[str, Any]) -> "go.Figure":
+    """Interactive twin of :func:`aggregate_seaborn`."""
+    figure = make_subplots(
+        rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.08,
+        subplot_titles=("Success rate (%) — mean over seeds", "Cumulative reward — mean over seeds"),
+    )
+    for index, (label, entry) in enumerate(series.items()):
+        color = COMPARISON_COLORS[index % len(COMPARISON_COLORS)]
+        legend = _aggregate_legend(label, entry, table)
+        for row, key in ((1, "win_rate"), (2, "reward")):
+            figure.add_trace(
+                go.Scatter(x=entry["episodes"], y=entry[f"{key}_min"], mode="lines",
+                           line=dict(width=0), hoverinfo="skip", showlegend=False, legendgroup=label),
+                row=row, col=1,
+            )
+            figure.add_trace(
+                go.Scatter(x=entry["episodes"], y=entry[f"{key}_max"], mode="lines",
+                           line=dict(width=0), fill="tonexty", fillcolor=_rgba(color, 0.15),
+                           hoverinfo="skip", showlegend=False, legendgroup=label),
+                row=row, col=1,
+            )
+            figure.add_trace(
+                go.Scatter(x=entry["episodes"], y=entry[f"{key}_mean"], mode="lines",
+                           name=legend if row == 1 else label, line=dict(color=color, width=3),
+                           legendgroup=label, showlegend=row == 1,
+                           hovertemplate="episode %{x}<br>%{y:.1f}<extra>" + label + "</extra>"),
+                row=row, col=1,
+            )
+    figure.add_hline(y=EVEN_MATCH_RATE, line=dict(color="#808080", width=1.4, dash="dash"),
+                     annotation_text=f"parity ({EVEN_MATCH_RATE:.0f}%)", row=1, col=1)
+    figure.update_layout(
+        template="plotly_white", height=760, hovermode="x unified",
+        title=dict(text="Seed sweep — mean per config, shaded min–max across seeds", x=0.02),
+        margin=dict(l=80, r=30, t=110, b=60),
+    )
+    figure.update_xaxes(showgrid=True, gridcolor=GRID_COLOR)
+    figure.update_yaxes(showgrid=True, gridcolor=GRID_COLOR)
+    figure.update_yaxes(range=[-2.0, 102.0], row=1, col=1)  # fixed 0-100 scale
+    figure.update_xaxes(title_text="Episode   (one episode = one battle)", row=2, col=1)
+    return figure
+
+
+def aggregate(
+    run_dirs: Sequence[Path],
+    out_dir: Optional[Path] = None,
+    stem: str = "aggregate",
+    formats: Sequence[str] = ("png", "html"),
+) -> Dict[str, Path]:
+    """Group runs by training config, write the mean-curve figure(s) and the seed table."""
+    run_dirs = [Path(run_dir) for run_dir in run_dirs]
+    series = aggregate_series(run_dirs)
+    table = aggregate_table(run_dirs)
+    if not series:
+        raise ValueError("no runs with a usable episodes.jsonl")
+    out_dir = Path(out_dir) if out_dir else run_dirs[0].parent
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    written: Dict[str, Path] = {}
+    written["json"] = out_dir / f"{stem}.json"
+    written["json"].write_text(
+        json.dumps({"configs": table, "windows": {"aggregate": AGGREGATE_WINDOW}}, indent=2),
+        encoding="utf-8",
+    )
+    if "png" in formats:
+        figure = aggregate_seaborn(series, table)
+        written["png"] = out_dir / f"{stem}.png"
+        figure.savefig(written["png"], dpi=150, bbox_inches="tight")
+        plt.close(figure)
+    if "html" in formats:
+        written["html"] = out_dir / f"{stem}.html"
+        aggregate_plotly(series, table).write_html(written["html"], include_plotlyjs=True)
+    return written
+
+
 def render(
     run_dir: Path,
     out_dir: Optional[Path] = None,
@@ -582,6 +826,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--compare", nargs="+", default=None, metavar="RUN",
         help="two or more run directories: overlay their curves instead of plotting one run",
     )
+    parser.add_argument(
+        "--aggregate", nargs="+", default=None, metavar="RUN",
+        help="two or more run directories: group by training config and average over seeds",
+    )
     parser.add_argument("--out-dir", default=None, help="where to write (default: the run dir)")
     parser.add_argument("--name", default=None, help="output stem (default: curve_check / comparison)")
     parser.add_argument(
@@ -597,6 +845,23 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: Optional[Sequence[str]] = None) -> int:
     args = build_parser().parse_args(argv)
     formats = [item.strip() for item in args.formats.split(",") if item.strip()]
+
+    if args.aggregate:
+        stem = args.name or "aggregate"
+        out_dir = Path(args.out_dir) if args.out_dir else Path(args.aggregate[0]).parent
+        written = aggregate(args.aggregate, out_dir=out_dir, stem=stem, formats=formats)
+        table = json.loads((out_dir / f"{stem}.json").read_text(encoding="utf-8"))["configs"]
+        for label, item in table.items():
+            stats = item["final_window_success_rate_pct"]
+            per_seed = ", ".join(f"{value:.1f}" for value in stats["per_seed"])
+            print(
+                f"{label}\n    final-200 win rate: {stats['mean']:.1f}% mean "
+                f"({per_seed}) spread {stats['spread']:.1f} pp over {item['seeds_per_config']} seeds\n"
+                f"    late trend: {item['late_trend_pp_per_1000']['mean']:+.1f} pp/1000 "
+                f"(seeds: {', '.join(f'{value:+.1f}' for value in item['late_trend_pp_per_1000']['per_seed'])})"
+            )
+        print("\nwrote:", ", ".join(str(path) for path in written.values()))
+        return 0
 
     if args.compare:
         stem = args.name or "comparison"

@@ -21,10 +21,14 @@ from lab_ca.plots import (
     CONVERGENCE_WINDOW,
     EVEN_MATCH_RATE,
     _binomial_half_width,
+    aggregate_by_config,
+    aggregate_series,
+    aggregate_table,
     binomial_sigma,
     block_means,
     comparison_seaborn,
     compute_metrics,
+    config_signature,
     load_episodes,
     load_frame,
     main,
@@ -228,6 +232,103 @@ def test_comparison_plot_uses_percentage_points(tmp_path):
     assert parity, "the 50 % parity line is missing from the success-rate panel"
 
     assert len(win_axis.collections) == 2, "one CI band per run"
+
+
+def _write_run(root: Path, name: str, wins, config: dict):
+    """One synthetic run on disk: episodes.jsonl plus the run_config.json the aggregator reads."""
+    run_dir = root / name
+    run_dir.mkdir()
+    (run_dir / "episodes.jsonl").write_text(
+        "\n".join(json.dumps(row) for row in _rows(wins)) + "\n", encoding="utf-8"
+    )
+    (run_dir / "run_config.json").write_text(json.dumps({"config": config}), encoding="utf-8")
+    return run_dir
+
+
+DEFAULT_CONFIG = {
+    "train_freq": 4, "gradient_steps": 1, "batch_size": 32,
+    "target_update_interval": 10_000, "net_arch": [64, 64],
+}
+BUDGET_CONFIG = {**DEFAULT_CONFIG, "train_freq": 1, "gradient_steps": 4, "batch_size": 128,
+                 "target_update_interval": 1000}
+
+
+def test_config_signature_labels_the_knobs_that_differ(tmp_path):
+    """Runs are grouped by *training config*, which is what makes a seed average meaningful."""
+    plain = _write_run(tmp_path, "plain", _flat_run(60), DEFAULT_CONFIG)
+    budget = _write_run(tmp_path, "budget", _flat_run(60), BUDGET_CONFIG)
+    assert "0.25 upd/step" in config_signature(plain)
+    assert "4 upd/step" in config_signature(budget)
+    assert config_signature(plain) != config_signature(budget)
+
+    unlabelled = tmp_path / "unlabelled"
+    unlabelled.mkdir()
+    assert config_signature(unlabelled) == "unlabelled"
+
+    # a run from before the override plumbing recorded fewer keys: reconstruct it from the
+    # documented defaults so it still groups with the other runs of the same config
+    legacy = tmp_path / "legacy"
+    legacy.mkdir()
+    (legacy / "run_config.json").write_text(
+        json.dumps({"config": {"train_freq": 4, "gradient_steps": 1, "batch_size": 32,
+                               "target_update_interval": 10_000}}),
+        encoding="utf-8",
+    )
+    assert config_signature(legacy) == config_signature(plain)
+
+
+def test_aggregate_averages_seeds_within_a_config(tmp_path):
+    """Two seeds of one config collapse to one entry with a real across-seed spread."""
+    root_a = _write_run(tmp_path, "a_seed0", _flat_run(600, rate=6), DEFAULT_CONFIG | {"seed": 0})
+    root_a2 = _write_run(tmp_path, "a_seed1", _flat_run(600, rate=4), DEFAULT_CONFIG | {"seed": 1})
+    root_b = _write_run(tmp_path, "b_seed0", _flat_run(600, rate=5), BUDGET_CONFIG | {"seed": 0})
+
+    groups = aggregate_by_config([root_a, root_a2, root_b])
+    assert len(groups) == 2
+    table = aggregate_table([root_a, root_a2, root_b])
+    label = next(item for item in table if "0.25 upd/step" in item)
+
+    stats = table[label]["final_window_success_rate_pct"]
+    assert table[label]["seeds_per_config"] == 2
+    assert stats["per_seed"] == pytest.approx([60.0, 40.0], abs=1.0)
+    assert stats["mean"] == pytest.approx(50.0, abs=1.0)
+    assert stats["spread"] == pytest.approx(20.0, abs=1.0)
+    assert table[label]["runs"] == ["a_seed0", "a_seed1"]
+
+    series = aggregate_series([root_a, root_a2, root_b])
+    assert set(series) == set(table)
+    entry = series[label]
+    assert entry["seeds"] == 2
+    assert entry["win_rate_mean"][-1] == pytest.approx(50.0, abs=1.5)
+    assert entry["win_rate_min"][-1] < entry["win_rate_max"][-1]
+
+
+def test_aggregate_series_envelope_brackets_every_seed(tmp_path):
+    """The shaded band must actually contain the per-seed curves, and the mean sit between them."""
+    dirs = [
+        _write_run(tmp_path, f"s{index}", _flat_run(600, rate=rate), DEFAULT_CONFIG | {"seed": index})
+        for index, rate in enumerate((7, 5, 4))
+    ]
+    entry = aggregate_series(dirs)[config_signature(dirs[0])]
+    assert entry["seeds"] == 3
+    assert np.all(entry["win_rate_min"] - 1e-9 <= entry["win_rate_mean"])
+    assert np.all(entry["win_rate_mean"] <= entry["win_rate_max"] + 1e-9)
+    assert entry["win_rate_mean"][-1] == pytest.approx((70 + 50 + 40) / 3, abs=1.5)
+
+
+def test_aggregate_cli_writes_artifacts(tmp_path):
+    dirs = [
+        _write_run(tmp_path, "x_seed0", _flat_run(400, rate=6), DEFAULT_CONFIG),
+        _write_run(tmp_path, "x_seed1", _flat_run(400, rate=5), DEFAULT_CONFIG),
+        _write_run(tmp_path, "y_seed0", _flat_run(400, rate=7), BUDGET_CONFIG),
+    ]
+    argv = ["--aggregate", *[str(item) for item in dirs], "--out-dir", str(tmp_path), "--name", "agg"]
+    assert main(argv) == 0
+    assert (tmp_path / "agg.png").stat().st_size > 10_000
+    assert (tmp_path / "agg.html").exists()
+    written = json.loads((tmp_path / "agg.json").read_text(encoding="utf-8"))
+    assert len(written["configs"]) == 2
+    assert written["windows"]["aggregate"] == 50
 
 
 def test_compare_overlays_two_runs(tmp_path):
