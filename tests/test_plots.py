@@ -19,10 +19,14 @@ from lab_ca.plots import (
     CONVERGENCE_SIGMA_MULTIPLE,
     CONVERGENCE_TOLERANCE_FLOOR,
     CONVERGENCE_WINDOW,
+    EVEN_MATCH_RATE,
     _binomial_half_width,
     binomial_sigma,
     block_means,
+    comparison_seaborn,
     compute_metrics,
+    load_episodes,
+    load_frame,
     main,
     moving_average,
 )
@@ -188,6 +192,42 @@ def test_only_flag_renders_one_panel(tmp_path):
     assert main(["--run", str(run_dir), "--only", "success", "--name", "only_success"]) == 0
     assert (run_dir / "only_success.png").exists()
     assert not (run_dir / "only_success_reward.png").exists()
+
+
+def test_comparison_plot_uses_percentage_points(tmp_path):
+    """Regression: ``win_rate`` is already in percent -- scaling it again put the axis at 5400 %.
+
+    The symptom was nasty: squashed curves, a parity line sitting on the floor, *and* an invisible
+    CI band (the double-scaled rate clipped to 1.0 inside the binomial formula, collapsing the
+    half-width to ~0). Caught by the vision QA pass, not by reading the code.
+    """
+    series, metrics = {}, {}
+    for name, rate in (("run_a", 6), ("run_b", 4)):
+        run_dir = tmp_path / name
+        run_dir.mkdir()
+        (run_dir / "episodes.jsonl").write_text(
+            "\n".join(json.dumps(row) for row in _rows(_flat_run(400, rate=rate))) + "\n",
+            encoding="utf-8",
+        )
+        series[name] = load_frame(run_dir)
+        metrics[name] = compute_metrics(load_episodes(run_dir))
+
+    figure = comparison_seaborn(series, metrics)
+    win_axis = figure.axes[0]
+    # the parity line is deliberately unlabelled in-axes (it appears in the shared figure legend)
+    curves = [line for line in win_axis.lines if line.get_label().startswith(("run_a", "run_b"))]
+    assert len(curves) == 2
+    # the bug guard: a double-scaled rate showed up as 5400 % here
+    assert max(float(np.max(line.get_ydata())) for line in curves) <= 100.0
+    # steady state: the periodic runs settle at 60 % and 40 % (their first point is a partial window)
+    finals = [float(line.get_ydata()[-1]) for line in curves]
+    assert finals == pytest.approx([60.0, 40.0], abs=1.5)
+    assert win_axis.get_ylim()[1] < 200.0  # not the squashed 0-10000 scale
+
+    parity = [line for line in win_axis.lines if set(np.asarray(line.get_ydata(), dtype=float)) == {EVEN_MATCH_RATE}]
+    assert parity, "the 50 % parity line is missing from the success-rate panel"
+
+    assert len(win_axis.collections) == 2, "one CI band per run"
 
 
 def test_compare_overlays_two_runs(tmp_path):

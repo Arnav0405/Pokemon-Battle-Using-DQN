@@ -425,33 +425,43 @@ def comparison_seaborn(series: "Dict[str, pd.DataFrame]", metrics: Dict[str, Dic
     sns.set_theme(style="whitegrid", context="talk", palette="deep")
     sns.set_context("talk", rc={"axes.titlesize": 15, "axes.labelsize": 13, "legend.fontsize": 9})
 
-    figure, axes = plt.subplots(2, 1, figsize=(12, 8.6), sharex=True)
+    figure, axes = plt.subplots(2, 1, figsize=(12, 9.2), sharex=True)
+    rate_handles: list = []
+    rate_labels: list = []
     for index, (name, frame) in enumerate(series.items()):
         color = COMPARISON_COLORS[index % len(COMPARISON_COLORS)]
-        rate = frame["win_rate"] * 100.0
+        rate = frame["win_rate"]  # already percentage points (load_frame scales it once)
         half = _binomial_half_width(rate, WIN_WINDOW)
         axes[0].fill_between(
-            frame["episode"], rate - half, rate + half, color=color, alpha=0.12, linewidth=0,
+            frame["episode"], rate - half, rate + half, color=color, alpha=0.20, linewidth=0,
         )
-        axes[0].plot(frame["episode"], rate, color=color, linewidth=2.4,
-                     label=_comparison_legend(name, metrics[name]))
-        axes[1].plot(frame["episode"], frame["reward_smooth"], color=color, linewidth=1.9, label=name)
+        rate_handles.append(
+            axes[0].plot(frame["episode"], rate, color=color, linewidth=2.6,
+                         label=_comparison_legend(name, metrics[name]))[0]
+        )
+        rate_labels.append(_comparison_legend(name, metrics[name]))
+        axes[1].plot(frame["episode"], frame["reward_smooth"], color=color, linewidth=2.0, label=name)
 
-    axes[0].axhline(EVEN_MATCH_RATE, color="0.45", linestyle=(0, (4, 3)), linewidth=1.2,
-                    label=f"parity ({EVEN_MATCH_RATE:.0f}%)")
+    parity = axes[0].axhline(EVEN_MATCH_RATE, color="0.45", linestyle=(0, (4, 3)), linewidth=1.3)
     axes[0].set_ylabel("Success rate (%)")
-    axes[1].axhline(0.0, color="0.45", linestyle=(0, (4, 3)), linewidth=1.2)
+    axes[1].axhline(0.0, color="0.45", linestyle=(0, (4, 3)), linewidth=1.3)
     axes[1].set_ylabel(f"Cumulative reward\n(moving average, window {REWARD_WINDOW})")
     axes[1].set_xlabel("Episode   (one episode = one battle)")
     for axis in axes:
-        axis.legend(loc="best", framealpha=0.92)
         axis.margins(x=0.01)
+    # one shared legend *outside* the axes: the curves cross every corner of these panels, so any
+    # in-axes legend ends up on top of data (both colors are shared by the two panels)
+    figure.legend(
+        [*rate_handles, parity],
+        [*rate_labels, f"parity with the opponent ({EVEN_MATCH_RATE:.0f}%)"],
+        loc="upper center", bbox_to_anchor=(0.5, 0.885), ncol=3, framealpha=0.95, fontsize=10.5,
+    )
     figure.suptitle(
         "Run comparison — success rate (with ±95% binomial CI) and reward\n"
-        "bands overlap ⇒ the difference is not resolvable at this episode count",
-        fontsize=13,
+        "overlapping bands mean the difference is not resolvable at this episode count",
+        fontsize=13, y=0.98,
     )
-    figure.tight_layout(rect=(0, 0, 1, 0.94))
+    figure.tight_layout(rect=(0, 0, 1, 0.855))
     return figure
 
 
@@ -463,7 +473,7 @@ def comparison_plotly(series: "Dict[str, pd.DataFrame]", metrics: Dict[str, Dict
     )
     for index, (name, frame) in enumerate(series.items()):
         color = COMPARISON_COLORS[index % len(COMPARISON_COLORS)]
-        rate = frame["win_rate"] * 100.0
+        rate = frame["win_rate"]  # already percentage points
         half = _binomial_half_width(rate, WIN_WINDOW)
         legend = _comparison_legend(name, metrics[name])
         figure.add_trace(
@@ -493,7 +503,7 @@ def comparison_plotly(series: "Dict[str, pd.DataFrame]", metrics: Dict[str, Dict
                      annotation_text=f"parity ({EVEN_MATCH_RATE:.0f}%)", row=1, col=1)
     figure.update_layout(
         template="plotly_white", height=760, hovermode="x unified",
-        title=dict(text="Run comparison — bands overlap ⇒ not resolvable at this episode count", x=0.02),
+        title=dict(text="Run comparison — overlapping bands mean the difference is not resolvable", x=0.02),
         legend=dict(orientation="h", yanchor="bottom", y=1.03, xanchor="right", x=1),
         margin=dict(l=80, r=30, t=150, b=60),
     )

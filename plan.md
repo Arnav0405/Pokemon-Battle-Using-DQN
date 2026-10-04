@@ -113,6 +113,14 @@ The loop is server-bound (5.29 ms per env step) while one gradient update on the
   clears the baseline's by more than the bands overlap **and** its late slope is smaller in
   magnitude (i.e. it flattens sooner, not just higher). Seed noise is unknown, so this is a
   single-seed screen; confirming a winner needs 2 seeds.
+- **Result — it clears both halves:** final 200 episodes **57.5 % → 67.0 %** (+9.5 pp, ~2 σ of the
+  ±3.5 pp window bands) and the late trend drops from **+7.7 ± 4.4** to **+3.5 ± 9.2 pp / 1 000**
+  (CI now contains zero). Episodes 3650 → 4018 at the same 100 k steps; steps per episode 27.4 →
+  24.9 (closing games out rather than trading). Cost: 189 → 99 fps, so 17 min per 100 k steps.
+  Artifacts: `runs/p3b_100k/{curve_check.png,curve_check.html,metrics.json,train.log,notes.md}` and
+  the A/B `runs/p3_ab.{png,html,json}`. **Caveat: one seed** — seed variance is still unmeasured, and
+  these are training-time win rates (ε = 0.02, moving policy), not the frozen-policy evaluation of
+  Phase 4. Full write-up in `runs/p3b_100k/notes.md`.
 
 ## Phase 4 — Evaluation
 
