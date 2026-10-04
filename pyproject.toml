@@ -9,6 +9,10 @@ authors = [
 requires-python = ">=3.13"
 dependencies = [
     "poke-env==0.16.1",
+    # Phase 2 learner. torch comes from PyPI as the CPU build on Windows, which is what we
+    # want: the training bottleneck is the Showdown simulation, not the MLP.
+    "stable-baselines3==2.9.0",
+    "torch>=2.8,<3",
 ]
 
 [project.scripts]

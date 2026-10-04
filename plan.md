@@ -41,11 +41,27 @@ Spec §2/§4/§10 updated to match poke-env 0.16.1 (embed_battle, two-agent env 
 - [x] (added during the phase) teardown hardening so a failed episode cannot wedge the process: `close()`/`reset_battles()` no longer touch poke-env's racy cap-1 queue drains — artifact: `docs/poke-env-0.16.1-gotchas.md`, 13/13 tests green in ~15 s
 - Baseline sanity: the type-aware heuristic beats the random baseline 8–0 over 8 battles — artifact: `tests/test_opponent.py::test_heuristic_beats_random_over_a_short_series`
 
-## Phase 2 — Training + logging
+## Phase 2 — Training + logging — DONE
 
-- [ ] `src/lab_ca/train.py`: SB3 `DQN` (MlpPolicy) loop with the masking decision above, checkpoints to `runs/` — artifact: `runs/<run>/model_*.zip`
-- [ ] Per-episode metric logging contract (`episode, cumulative_reward, steps, win, epsilon, timestamp, opponent`) — artifact: `runs/<run>/episodes.jsonl` + CSV mirror
-- [ ] Shaped-reward curves look sane on a short run (not flat at zero) — artifact: partial-run log
+- [x] `src/lab_ca/train.py`: SB3 `DQN` loop with the masking decision above, checkpoints to `runs/` — artifact: `runs/p2_smoke/model_1000_steps.zip`, `model_2000_steps.zip`, `model_final.zip`
+- [x] Per-episode metric logging contract (`episode, cumulative_reward, steps, win, epsilon, timestamp, opponent`) — artifact: `runs/p2_smoke/episodes.jsonl` + `episodes.csv` (70 rows, CSV header matches the contract, counts agree)
+- [x] Shaped-reward curves look sane on a short run (not flat at zero) — artifact: `runs/p2_smoke/train.log` (`ep_rew_mean -41.5`, `ep_len_mean 28.2`, 454 updates in 10 s / 189 steps·s⁻¹) and the log itself: rewards −48.0…+35.6, 64 distinct values over 70 episodes, 0 at zero, 1 win
+- [x] (added) masking as its own unit, `src/lab_ca/policy.py`, so it is testable without a server — artifact: `tests/test_policy.py` (6 offline tests: greedy legality under a moving mask, epsilon-greedy legality, no illegal action stored in the replay buffer, −inf on both Q-nets, row-wise batch masking, log contract)
+- [x] (added) `tests/test_train.py` runs a real 300-step training run and asserts the artifacts — artifact: same file, `13 → 20` tests green in ~22 s
+
+### Phase 2 deltas vs spec §3/§4
+
+| Spec says | What we did |
+|---|---|
+| `MlpPolicy` | `MultiInputPolicy`: the observation is a **dict** (state vector + `action_mask`), which `MlpPolicy` cannot consume |
+| masking "in `train.py`" | in `policy.py` as `MaskedQNetwork` / `MaskedDQNPolicy` / `MaskedDQN`, imported by `train.py` — same phase, but unit-testable without the battle env |
+| `Monitor` | from `stable_baselines3.common.monitor`: gymnasium 1.3.0 no longer exports `gymnasium.wrappers.Monitor` |
+| — | one `DummyVecEnv([Monitor(OutcomeWrapper(make_env(...)))])`; `OutcomeWrapper` puts `win`/`outcome` into `info` because poke-env's info dict is empty |
+| — | SB3's own logger is off (no tensorboard); the report contract is our `episodes.jsonl`/`episodes.csv` |
+
+Verified along the way: 70 episodes ran on **one reused env** (no teardown stalls, no
+`EnvironmentError` between episodes), and the env never received an illegal action — with
+`strict=True` that would have raised immediately.
 
 ## Phase 3 — First learning curves
 
