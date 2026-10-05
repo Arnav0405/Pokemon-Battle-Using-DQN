@@ -230,7 +230,8 @@ def test_replays_group_by_battle_tag_and_report_their_own_winner(tmp_path: Path)
     """Both sides write a file, and the result is read from the file rather than from write order."""
     demo_dir = tmp_path / "demo"
     demo_dir.mkdir()
-    win_line = "|win|" + DEMO_AGENT_USERNAME
+    # the real files end the line right after the username, with layout whitespace following it
+    win_line = "|win|" + DEMO_AGENT_USERNAME + "\n    "
     (demo_dir / f"{DEMO_AGENT_USERNAME} - battle-gen9customgame-1.html").write_text(
         f"<html>{win_line}</html>", encoding="utf-8"
     )

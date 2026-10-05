@@ -409,7 +409,7 @@ def evaluate_checkpoint(config: EvalConfig) -> Path:
 
 
 REPLAY_NAME = re.compile(r"^(?P<side>.+?) - (?P<tag>battle-.+)\.html$")
-REPLAY_WIN_LINE = re.compile(r"\|win\|([^<\"\\]+)")
+REPLAY_WIN_LINE = re.compile(r"\|win\|([^\s<\"\\]+)")
 REPLAY_LOG_DATA = re.compile(
     r'<script type="text/plain" class="battle-log-data">(?P<log>.*?)</script>', re.DOTALL
 )
@@ -442,7 +442,12 @@ def replay_result(path: Path) -> Dict[str, Any]:
     """
     text = path.read_text(encoding="utf-8", errors="replace")
     winner = REPLAY_WIN_LINE.search(text)
-    return {"winner": winner.group(1) if winner else None, "forfeit": "|forfeit" in text}
+    # the username runs to the end of the line in the embedded log, so trailing layout whitespace
+    # would otherwise land in eval.json as part of the winner's name
+    return {
+        "winner": winner.group(1).strip() if winner else None,
+        "forfeit": "|forfeit" in text,
+    }
 
 
 def write_log_view(replay_path: Path, out_path: Path) -> Optional[Path]:
@@ -551,6 +556,10 @@ def run_demo(config: EvalConfig) -> Path:
                 "counted_battles": len(counted_battles),
                 "unrequested_battles": len(all_battles - counted_battles),
                 "replays": replays,
+                # the demo runs at its own revision: the top-level provenance belongs to the pass-1
+                # results, so the demo section carries its own instead of inheriting that claim
+                "git_commit": _git("rev-parse", "HEAD"),
+                "git_dirty": bool(_git("status", "--porcelain")),
             },
             # what the report links: the agent's own copy of every counted battle
             "demo_replays": [
