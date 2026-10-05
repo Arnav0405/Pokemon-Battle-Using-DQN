@@ -297,7 +297,7 @@ def seaborn_figure(frame: pd.DataFrame, metrics: Dict[str, Any], specs: List[Dic
         axis.legend(loc="best", framealpha=0.92)
         axis.margins(x=0.01)
 
-    axes[-1, 0].set_xlabel("Episode   (one episode = one battle)")
+    axes[-1, 0].set_xlabel("Episode   (one battle ≈ 25 env steps)")
     figure.suptitle(
         f"DQN vs {metrics['opponent']} — {frame.attrs.get('run', 'run')}\n{_summary_line(metrics)}",
         fontsize=14,
@@ -393,7 +393,7 @@ def plotly_figure(frame: pd.DataFrame, metrics: Dict[str, Any], specs: List[Dict
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
         margin=dict(l=70, r=30, t=140, b=60),
     )
-    figure.update_xaxes(title_text="Episode   (one episode = one battle)", row=len(specs), col=1)
+    figure.update_xaxes(title_text="Episode   (one battle ≈ 25 env steps)", row=len(specs), col=1)
     figure.update_xaxes(showgrid=True, gridcolor=GRID_COLOR)
     figure.update_yaxes(showgrid=True, gridcolor=GRID_COLOR)
     return figure
@@ -446,7 +446,7 @@ def comparison_seaborn(series: "Dict[str, pd.DataFrame]", metrics: Dict[str, Dic
     axes[0].set_ylabel("Success rate (%)")
     axes[1].axhline(0.0, color="0.45", linestyle=(0, (4, 3)), linewidth=1.3)
     axes[1].set_ylabel(f"Cumulative reward\n(moving average, window {REWARD_WINDOW})")
-    axes[1].set_xlabel("Episode   (one episode = one battle)")
+    axes[1].set_xlabel("Episode   (one battle ≈ 25 env steps)")
     for axis in axes:
         axis.margins(x=0.01)
     # one shared legend *outside* the axes: the curves cross every corner of these panels, so any
@@ -509,7 +509,7 @@ def comparison_plotly(series: "Dict[str, pd.DataFrame]", metrics: Dict[str, Dict
     )
     figure.update_xaxes(showgrid=True, gridcolor=GRID_COLOR)
     figure.update_yaxes(showgrid=True, gridcolor=GRID_COLOR)
-    figure.update_xaxes(title_text="Episode   (one episode = one battle)", row=2, col=1)
+    figure.update_xaxes(title_text="Episode   (one battle ≈ 25 env steps)", row=2, col=1)
     return figure
 
 
@@ -549,6 +549,20 @@ def compare(
 AGGREGATE_WINDOW = 50  # episodes per aggregated point (non-overlapping: independent blocks)
 
 
+def _step_budget_label(timesteps: Any) -> str:
+    """The step budget, as it appears in a config signature.
+
+    A 100 k-step and a 200 k-step run are *not* repeat seeds of one experiment, so the budget has
+    to be part of the signature or the aggregator averages across two different questions. Runs
+    that never recorded it say so rather than being folded into the default budget.
+    """
+    if not isinstance(timesteps, (int, float)) or isinstance(timesteps, bool) or timesteps <= 0:
+        return "steps unknown"
+    if timesteps % 1000 == 0:
+        return f"{timesteps / 1000:g}k steps"
+    return f"{timesteps:g} steps"
+
+
 def config_signature(run_dir: Path) -> str:
     """Label a run by the training config that produced it (read from ``run_config.json``).
 
@@ -573,7 +587,7 @@ def config_signature(run_dir: Path) -> str:
     arch_text = ",".join(str(width) for width in arch) if isinstance(arch, list) else str(arch)
     return (
         f"{updates:g} upd/step · arch [{arch_text}] · batch {config['batch_size']} "
-        f"· target {config['target_update_interval']}"
+        f"· target {config['target_update_interval']} · {_step_budget_label(config.get('timesteps'))}"
     )
 
 
@@ -664,14 +678,96 @@ def aggregate_series(run_dirs: Sequence[Path], window: int = AGGREGATE_WINDOW) -
     return series
 
 
-def _aggregate_legend(label: str, entry: Dict[str, Any], table: Dict[str, Any]) -> str:
+def _signature_parts(signature: str) -> "tuple[str, str]":
+    """Split a config signature into (training knobs, step budget) so a legend can show both."""
+    parts = [piece.strip() for piece in signature.split("·")]
+    if len(parts) > 1 and "steps" in parts[-1]:
+        return " · ".join(parts[:-1]), parts[-1]
+    return signature, ""
+
+
+def _shared_knobs(series: Dict[str, Dict[str, Any]]) -> str:
+    """The knob signature shared by every group, or ``""`` if they differ.
+
+    When all groups run the same hyperparameters (e.g. one config at two step budgets), repeating
+    them in every legend entry wastes the densest space in the figure; the title carries them once.
+    """
+    knobs = {_signature_parts(label)[0] for label in series}
+    return knobs.pop() if len(knobs) == 1 else ""
+
+
+def _aggregate_legend(label: str, entry: Dict[str, Any], table: Dict[str, Any],
+                      show_knobs: bool = True) -> str:
+    """Short lines: the knobs (unless shared), how many runs back the curve, the headline number.
+
+    A single-run group has no envelope, and saying so in the legend is the difference between a
+    reader trusting the line and a reader mistaking an unshaded curve for a plotting bug.
+    """
     stats = table.get(label, {}).get("final_window_success_rate_pct", {})
     if not stats:
         return label
-    return (
-        f"{label}\n{stats['mean']:.1f}% mean over {len(stats['per_seed'])} seeds "
-        f"({stats['min']:.1f}–{stats['max']:.1f})"
+    seeds = len(stats["per_seed"])
+    knobs, budget = _signature_parts(label)
+    head = f"{budget} — " if budget else ""
+    if seeds == 1:
+        scope = f"{head}n=1 (single run, no envelope)"
+        tail = f"{stats['mean']:.1f}% final {FINAL_WINDOW}"
+    else:
+        scope = f"{head}n={seeds} seeds"
+        tail = (f"{stats['mean']:.1f}% mean final {FINAL_WINDOW} "
+                f"(min–max {stats['min']:.1f}–{stats['max']:.1f})")
+    lines = ([knobs] if show_knobs else []) + [scope, tail]
+    return "\n".join(lines)
+
+
+X_END_RATIO = 0.8  # a "curves end here" mark needs a real gap, not a few percent of run-to-run spread
+
+
+def _curve_end_note(series: Dict[str, Dict[str, Any]]) -> str:
+    """Footnote for a figure whose groups ran to genuinely different episode counts."""
+    notes = []
+    ends: Dict[str, float] = {}
+    for label, entry in series.items():
+        episodes = entry.get("episodes")
+        if episodes is not None and len(episodes):
+            ends[label] = float(episodes[-1])
+    if ends and min(ends.values()) <= X_END_RATIO * max(ends.values()):
+        shortest = min(ends, key=ends.get)
+        budget = _signature_parts(shortest)[1] or shortest
+        notes.append(f"the {budget} curves end at ≈{ends[shortest]:,.0f} battles (that config ran out "
+                     f"of episodes); beyond that point the figure shows the longer run only")
+    if any(entry.get("seeds", 1) <= 1 for entry in series.values()):
+        notes.append("a single-run curve has no seed variance behind it — treat its level as "
+                     "indicative, not as a replicated mean")
+    return " · ".join(notes)
+
+
+def _mark_shortest_end(axis: "plt.Axes", series: Dict[str, Dict[str, Any]]) -> "Optional[float]":
+    """Dotted line where a much shorter group stops; returns the x it marked, if any.
+
+    Runs of the same config differ slightly in episode count (steps per battle varies), so only a
+    real scale gap — one group stopping at well under ``X_END_RATIO`` of the longest — is annotated;
+    otherwise every multi-seed figure would carry a spurious "ends here" mark.
+    """
+    ends = {
+        label: float(entry["episodes"][-1])
+        for label, entry in series.items()
+        if entry.get("episodes") is not None and len(entry["episodes"])
+    }
+    if len(ends) < 2 or min(ends.values()) > X_END_RATIO * max(ends.values()):
+        return None
+    shortest = min(ends, key=ends.get)
+    budget = _signature_parts(shortest)[1] or shortest
+    axis.axvline(ends[shortest], color="0.55", linestyle=(0, (2, 3)), linewidth=1.1)
+    # horizontal, just above the top spine: a rotated label inside the panel collides with the
+    # curves and the seed band near the line
+    axis.annotate(
+        f"{budget} ends here", xy=(ends[shortest], 1.0), xycoords=("data", "axes fraction"),
+        xytext=(0.0, 4.0), textcoords="offset points",
+        fontsize=10.5, color="0.3", ha="center", va="bottom",
+        bbox=dict(facecolor="white", edgecolor="none", alpha=0.9, pad=1.4),
     )
+    return ends[shortest]
 
 
 def aggregate_seaborn(series: Dict[str, Dict[str, Any]], table: Dict[str, Any]) -> "plt.Figure":
@@ -681,38 +777,57 @@ def aggregate_seaborn(series: Dict[str, Dict[str, Any]], table: Dict[str, Any]) 
 
     figure, axes = plt.subplots(2, 1, figsize=(12, 9.2), sharex=True)
     handles, labels = [], []
+    shared = _shared_knobs(series)
     for index, (label, entry) in enumerate(series.items()):
         color = COMPARISON_COLORS[index % len(COMPARISON_COLORS)]
+        # a single-run group is drawn lighter and thinner: its curve has no seed envelope behind it,
+        # so it must not read as strongly supported as a multi-seed mean
+        single = entry.get("seeds", 1) <= 1
+        width, alpha = (2.0, 0.82) if single else (2.8, 1.0)
+        legend_text = _aggregate_legend(label, entry, table, show_knobs=not shared)
         axes[0].fill_between(entry["episodes"], entry["win_rate_min"], entry["win_rate_max"],
                              color=color, alpha=0.24, linewidth=0)
         handle = axes[0].plot(entry["episodes"], entry["win_rate_mean"], color=color,
-                              linewidth=2.8, label=_aggregate_legend(label, entry, table))[0]
+                              linewidth=width, alpha=alpha, label=legend_text)[0]
         handles.append(handle)
-        labels.append(_aggregate_legend(label, entry, table))
+        labels.append(legend_text)
         axes[1].fill_between(entry["episodes"], entry["reward_min"], entry["reward_max"],
                              color=color, alpha=0.20, linewidth=0)
-        axes[1].plot(entry["episodes"], entry["reward_mean"], color=color, linewidth=2.2)
+        axes[1].plot(entry["episodes"], entry["reward_mean"], color=color,
+                     linewidth=width - 0.4, alpha=alpha)
 
     parity = axes[0].axhline(EVEN_MATCH_RATE, color="0.45", linestyle=(0, (4, 3)), linewidth=1.3)
     handles.append(parity)
     labels.append(f"parity with the opponent ({EVEN_MATCH_RATE:.0f}%)")
-    axes[0].set_ylabel(f"Success rate (%)\nmean over seeds, window {AGGREGATE_WINDOW}")
+    marked = _mark_shortest_end(axes[0], series)
+    if marked is not None:
+        axes[1].axvline(marked, color="0.55", linestyle=(0, (2, 3)), linewidth=1.1)
+    axes[0].set_ylabel(f"Success rate (%)\n{AGGREGATE_WINDOW}-episode rolling mean")
     axes[0].set_ylim(-2.0, 102.0)  # fixed 0-100 so panels stay comparable across figures
     axes[1].axhline(0.0, color="0.45", linestyle=(0, (4, 3)), linewidth=1.3)
-    axes[1].set_ylabel(f"Cumulative reward\nmean over seeds, window {AGGREGATE_WINDOW}")
-    axes[1].set_xlabel("Episode   (one episode = one battle)")
+    axes[1].set_ylabel(f"Cumulative reward\n{AGGREGATE_WINDOW}-episode rolling mean")
+    axes[1].set_xlabel("Episode   (one battle ≈ 25 env steps)")
     for axis in axes:
         axis.margins(x=0.01)
 
-    figure.legend(handles, labels, loc="upper left", bbox_to_anchor=(0.01, 0.885), ncol=1,
-                  framealpha=0.95, fontsize=9.5)
+    # a tall legend (six groups) would run into the title in a single column, so wrap it
+    columns = 1 if sum(label.count("\n") + 1 for label in labels) <= 6 else 2
+    figure.legend(handles, labels, loc="lower left", bbox_to_anchor=(0.008, 0.752),
+                  ncol=columns, framealpha=0.95, fontsize=11.5)
+    knobs_line = f"{shared}  ·  " if shared else ""
+    lighter = " · single-run curves are drawn lighter" if any(
+        entry.get("seeds", 1) <= 1 for entry in series.values()) else ""
     figure.suptitle(
-        "Seed sweep — mean curve per config (shaded: min–max across seeds)\n"
-        "overlapping envelopes mean the configs are not separated by this many seeds; "
-        "curves end where a config's runs ran out of episodes",
+        "Training curves by config — mean over seeds (shaded band: min–max across seeds)\n"
+        f"{knobs_line}training-time win rate vs the scripted heuristic (moving policy, ε floor "
+        f"0.02){lighter}",
         fontsize=13, y=0.98,
     )
-    figure.tight_layout(rect=(0, 0, 1, 0.79))
+    figure.tight_layout(rect=(0, 0.05, 1, 0.74))
+    note = _curve_end_note(series)
+    if note:
+        figure.text(0.012, 0.022, note, fontsize=11, color="0.32", ha="left", va="bottom",
+                    wrap=True)
     return figure
 
 
@@ -724,7 +839,8 @@ def aggregate_plotly(series: Dict[str, Dict[str, Any]], table: Dict[str, Any]) -
     )
     for index, (label, entry) in enumerate(series.items()):
         color = COMPARISON_COLORS[index % len(COMPARISON_COLORS)]
-        legend = _aggregate_legend(label, entry, table)
+        single = entry.get("seeds", 1) <= 1
+        legend = _aggregate_legend(label, entry, table, show_knobs=not _shared_knobs(series))
         for row, key in ((1, "win_rate"), (2, "reward")):
             figure.add_trace(
                 go.Scatter(x=entry["episodes"], y=entry[f"{key}_min"], mode="lines",
@@ -739,22 +855,53 @@ def aggregate_plotly(series: Dict[str, Dict[str, Any]], table: Dict[str, Any]) -
             )
             figure.add_trace(
                 go.Scatter(x=entry["episodes"], y=entry[f"{key}_mean"], mode="lines",
-                           name=legend if row == 1 else label, line=dict(color=color, width=3),
+                           name=legend if row == 1 else label,
+                           line=dict(color=color, width=2 if single else 3),
+                           opacity=0.85 if single else 1.0,
                            legendgroup=label, showlegend=row == 1,
                            hovertemplate="episode %{x}<br>%{y:.1f}<extra>" + label + "</extra>"),
                 row=row, col=1,
             )
     figure.add_hline(y=EVEN_MATCH_RATE, line=dict(color="#808080", width=1.4, dash="dash"),
                      annotation_text=f"parity ({EVEN_MATCH_RATE:.0f}%)", row=1, col=1)
+    figure.add_hline(y=0.0, line=dict(color="#808080", width=1.2, dash="dot"), row=2, col=1)
+    knobs_prefix = f"{_shared_knobs(series)} · " if _shared_knobs(series) else ""
+    ends = {
+        label: float(entry["episodes"][-1])
+        for label, entry in series.items()
+        if entry.get("episodes") is not None and len(entry["episodes"])
+    }
+    if len(ends) > 1 and min(ends.values()) <= X_END_RATIO * max(ends.values()):
+        shortest = min(ends, key=ends.get)
+        budget = _signature_parts(shortest)[1] or shortest
+        for row in (1, 2):
+            figure.add_vline(
+                x=ends[shortest], line=dict(color="#8C8C8C", width=1.2, dash="dot"), row=row, col=1,
+                annotation_text=f"{budget} ends here" if row == 1 else None,
+                annotation_position="top", annotation_font_size=11,
+            )
+    note = _curve_end_note(series)
+    if note:
+        figure.add_annotation(text=note, xref="paper", yref="paper", x=0.0, y=-0.13,
+                              showarrow=False, align="left", font=dict(size=11, color="#555555"))
     figure.update_layout(
-        template="plotly_white", height=760, hovermode="x unified",
-        title=dict(text="Seed sweep — mean per config, shaded min–max across seeds", x=0.02),
-        margin=dict(l=80, r=30, t=110, b=60),
+        template="plotly_white", height=780, hovermode="x unified",
+        title=dict(
+            text=("Training curves by config — mean over seeds, shaded min–max across seeds<br>"
+                  "<sup>" + knobs_prefix + "training-time win rate vs the scripted heuristic "
+                  "(moving policy, ε floor 0.02)</sup>"),
+            x=0.02,
+        ),
+        margin=dict(l=80, r=30, t=120, b=110),
     )
     figure.update_xaxes(showgrid=True, gridcolor=GRID_COLOR)
     figure.update_yaxes(showgrid=True, gridcolor=GRID_COLOR)
     figure.update_yaxes(range=[-2.0, 102.0], row=1, col=1)  # fixed 0-100 scale
-    figure.update_xaxes(title_text="Episode   (one episode = one battle)", row=2, col=1)
+    figure.update_yaxes(title_text=f"Success rate (%)\n{AGGREGATE_WINDOW}-episode rolling mean",
+                        row=1, col=1)
+    figure.update_yaxes(title_text=f"Cumulative reward\n{AGGREGATE_WINDOW}-episode rolling mean",
+                        row=2, col=1)
+    figure.update_xaxes(title_text="Episode   (one battle ≈ 25 env steps)", row=2, col=1)
     return figure
 
 

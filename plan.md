@@ -171,6 +171,19 @@ Artifacts: `runs/sweep_notes.md` (full tables + caveats), `runs/sweep_aggregate.
 - 200 k-step run of B: `runs/p3_200k_2` (the `_2` is because `make_run_dir` never overwrites, and
   the killed arm-A attempt had taken `runs/p3_200k`; that stale directory was deleted). Single
   seed — the across-seed spread of arm B is already characterised at 100 k (10.5 pp).
+- **Result (200 k, arm B):** 7 774 episodes, 27 min, 0 unfinished. Final 200 episodes **87.5 %**,
+  above every 100 k seed (67.0–77.5 %), i.e. ≈ +14 pp over the 100 k mean — with the n = 1 caveat
+  stated in `runs/p3_200k_2/notes.md`. Late trend **+5.2 ± 2.9 pp/1000 (CI excludes 0)**: still
+  climbing, convergence **not declared**. Blocks: 37.7 → 67.1 → 62.2 → 70.4 → 72.3 → 76.6 → 79.9 →
+  82.3 %. So "convergence is hard by 200 k" is really "200 k is still on the ascending part of the
+  curve"; the binding constraint was the training budget, not exploration (ε floor at ~2 % of the
+  run) or capacity (arm C: no mean gain, 51 pp spread).
+- `config_signature` now includes the step budget: 100 k and 200 k runs of the same knobs are
+  different experiments, not repeat seeds, so they must not average into one envelope. Figure:
+  `runs/b_100k_vs_200k.{png,html,json}`.
+- If convergence *declared* is wanted, the evidence points at more steps (300–500 k) rather than
+  more architecture work; the alternative lever is the observation (tier 3), which changes the
+  interface and needs its own spec.
 
 ## Phase 4 — Evaluation
 

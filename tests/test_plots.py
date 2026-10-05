@@ -17,6 +17,8 @@ import pytest
 from lab_ca import plots as plots_module
 from lab_ca.plots import (
     CONVERGENCE_SIGMA_MULTIPLE,
+    _curve_end_note,
+    _mark_shortest_end,
     CONVERGENCE_TOLERANCE_FLOOR,
     CONVERGENCE_WINDOW,
     EVEN_MATCH_RATE,
@@ -275,6 +277,50 @@ def test_config_signature_labels_the_knobs_that_differ(tmp_path):
         encoding="utf-8",
     )
     assert config_signature(legacy) == config_signature(plain)
+
+
+def test_config_signature_separates_step_budgets(tmp_path):
+    """Same knobs, different step budget = different experiment, so they must not average together.
+
+    Regression: the 200 k-step run of the adopted config grouped with its 100 k-step seeds, which
+    would have produced an "arm B" mean that averaged two different budgets into one envelope.
+    """
+    short = _write_run(tmp_path, "short", _flat_run(60), BUDGET_CONFIG | {"timesteps": 100_000})
+    long = _write_run(tmp_path, "long", _flat_run(60), BUDGET_CONFIG | {"timesteps": 200_000})
+    assert "100k steps" in config_signature(short)
+    assert "200k steps" in config_signature(long)
+    assert config_signature(short) != config_signature(long)
+    assert len(aggregate_by_config([short, long])) == 2
+
+    # a run that never recorded a budget is labelled as such, and does not merge into either
+    silent = _write_run(tmp_path, "silent", _flat_run(60), BUDGET_CONFIG)
+    assert "steps unknown" in config_signature(silent)
+    assert config_signature(silent) not in (config_signature(short), config_signature(long))
+
+
+def test_curve_end_marker_needs_a_real_length_gap(tmp_path):
+    """Slightly different episode counts are normal (steps per battle varies) and must not be marked.
+
+    Regression: the "ends here" line and footnote fired on any difference, so a plain multi-seed
+    figure of one config grew a marker that meant nothing.
+    """
+    same_length = [
+        _write_run(tmp_path, f"same{index}", _flat_run(600 - index),
+                   BUDGET_CONFIG | {"seed": index, "timesteps": 100_000})
+        for index in range(3)
+    ]
+    series_same = aggregate_series(same_length)
+    assert _curve_end_note(series_same) == ""
+
+    short = _write_run(tmp_path, "short", _flat_run(700), BUDGET_CONFIG | {"timesteps": 100_000})
+    long = _write_run(tmp_path, "long", _flat_run(2000), BUDGET_CONFIG | {"timesteps": 200_000})
+    series_gap = aggregate_series([short, long])
+    assert "100k steps" in _curve_end_note(series_gap)
+
+    figure, axis = plots_module.plt.subplots()
+    assert _mark_shortest_end(axis, series_same) is None
+    assert _mark_shortest_end(axis, series_gap) is not None
+    plots_module.plt.close(figure)
 
 
 def test_aggregate_averages_seeds_within_a_config(tmp_path):
