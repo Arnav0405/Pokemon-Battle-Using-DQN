@@ -37,9 +37,11 @@ from __future__ import annotations
 import argparse
 import functools
 import glob
+import html
 import json
 import math
 import platform
+import re
 import subprocess
 import time
 from dataclasses import asdict, dataclass
@@ -211,12 +213,17 @@ def run_battles(
     rng: Optional[np.random.Generator] = None,
     turn_delay: float = 0.0,
     on_step: Optional[Callable[[VecEnv, int], None]] = None,
+    record_tags: bool = False,
 ) -> List[Dict[str, Any]]:
     """Play until ``battles`` episodes have finished; return one record per finished battle.
 
     With ``concurrent > 1`` the last step can finish more than the wanted number of battles, so the
     list is truncated to exactly ``battles`` and the extras are dropped (they are reported by
     neither the counts nor the rate).
+
+    ``record_tags`` also records which battle each finished episode belonged to. The demo needs that
+    to join a replay file to its outcome; everything else leaves it off, since it costs an attribute
+    walk per step.
     """
     rng = rng or np.random.default_rng()
     outcomes: List[Dict[str, Any]] = []
@@ -224,6 +231,9 @@ def run_battles(
     steps = 0
     limit = max(1, battles) * MAX_TURNS_PER_BATTLE
     while len(outcomes) < battles and steps < limit:
+        # read the in-flight battle *before* the step: that is the battle this step may finish (after
+        # it, the environment may already have started the next one)
+        tag = _live_battle_tag(vec_env) if record_tags else None
         obs, _rewards, _dones, infos = vec_env.step(choose_actions(model, obs, agent, rng))
         steps += 1
         if turn_delay:
@@ -239,6 +249,7 @@ def run_battles(
                     "won": bool(info.get("win", False)),
                     "outcome": info.get("outcome", "unknown"),
                     "steps": int(info["episode"]["l"]),
+                    "tag": tag,
                 }
             )
             if len(outcomes) >= battles:
@@ -397,13 +408,65 @@ def evaluate_checkpoint(config: EvalConfig) -> Path:
     return out_path
 
 
-def demo_out_path(config: "EvalConfig", demo_dir: Path) -> Path:
-    """Where the demo payload goes -- never the pass-1 ``eval.json`` next to the checkpoint.
+REPLAY_NAME = re.compile(r"^(?P<side>.+?) - (?P<tag>battle-.+)\.html$")
+REPLAY_WIN_LINE = re.compile(r"\|win\|([^<\"\\]+)")
+REPLAY_LOG_DATA = re.compile(
+    r'<script type="text/plain" class="battle-log-data">(?P<log>.*?)</script>', re.DOTALL
+)
 
-    ``EvalConfig.resolved_out()`` falls back to ``<run dir>/eval.json``, so a demo run without
-    ``--out`` would overwrite the evaluation that the report is built from.
+
+def demo_out_path(config: "EvalConfig", demo_dir: Path) -> Path:
+    """Where the demo payload goes: the run's ``eval.json``, unless ``--out`` overrides it.
+
+    ``eval.json`` is where the plan wants ``demo_replays`` recorded, and ``write_payload`` merges, so
+    the demo adds its keys next to the pass-1 ``results`` instead of replacing them.
     """
-    return Path(config.out) if config.out else demo_dir.parent / "demo.json"
+    return config.resolved_out()
+
+
+def group_replays(paths: Sequence[Path]) -> Dict[str, List[Path]]:
+    """Replay files grouped by battle tag -- both sides of a battle write their own file."""
+    grouped: Dict[str, List[Path]] = {}
+    for path in paths:
+        match = REPLAY_NAME.match(path.name)
+        grouped.setdefault(match.group("tag") if match else path.stem, []).append(path)
+    return grouped
+
+
+def replay_result(path: Path) -> Dict[str, Any]:
+    """What the replay file itself says: the ``|win|<username>`` line, and whether anyone forfeited.
+
+    The file is self-describing, so the demo reports the result the artifact states instead of one
+    inferred from the order files happened to be written in. The first version zipped a sorted file
+    list against the outcome list, which quietly attached a win to a different battle's replay.
+    """
+    text = path.read_text(encoding="utf-8", errors="replace")
+    winner = REPLAY_WIN_LINE.search(text)
+    return {"winner": winner.group(1) if winner else None, "forfeit": "|forfeit" in text}
+
+
+def write_log_view(replay_path: Path, out_path: Path) -> Optional[Path]:
+    """Write an offline transcript of a replay, or ``None`` if it carries no log.
+
+    poke-env embeds the whole protocol log in the replay, but renders it with
+    ``play.pokemonshowdown.com/js/replay-embed.js`` -- so *viewing* a replay reaches the public
+    client. This checkout ships no client at all (the page at the server root is a stub that
+    redirects to the psim.us client), which makes the transcript the watchable artifact: one
+    self-contained page, no network.
+    """
+    match = REPLAY_LOG_DATA.search(replay_path.read_text(encoding="utf-8", errors="replace"))
+    if not match:
+        return None
+    lines = "".join(f"<div>{html.escape(line)}</div>" for line in match.group("log").splitlines())
+    out_path.write_text(
+        "<!DOCTYPE html><meta charset='utf-8'>"
+        f"<title>{html.escape(replay_path.stem)}</title>"
+        "<style>body{font:13px/1.6 ui-monospace,Consolas,monospace;margin:24px;max-width:1000px}"
+        "h1{font-size:15px;font-family:system-ui,sans-serif}</style>"
+        f"<h1>{html.escape(replay_path.stem)}</h1>{lines}\n",
+        encoding="utf-8",
+    )
+    return out_path
 
 
 def run_demo(config: EvalConfig) -> Path:
@@ -434,26 +497,50 @@ def run_demo(config: EvalConfig) -> Path:
             outcomes = run_battles(
                 vec_env, model=model, agent=config.agent, opponent=opponent,
                 battles=config.demo_battles, rng=rng, turn_delay=config.demo_delay,
-                on_step=_announce,
+                on_step=_announce, record_tags=True,
             )
         finally:
             vec_env.close()
         written = sorted(set(demo_dir.glob("*.html")) - before)
-        for index, path in enumerate(written):
-            outcome = outcomes[index] if index < len(outcomes) else {}
-            replays.append(
-                {
+        by_tag = {outcome["tag"]: outcome for outcome in outcomes if outcome.get("tag")}
+        grouped = group_replays(written)
+        for tag, paths in sorted(grouped.items()):
+            outcome = by_tag.get(tag)
+            for path in paths:
+                record = {
                     "path": str(path),
+                    "battle": tag,
+                    "side": "agent" if path.name.startswith(DEMO_AGENT_USERNAME) else "opponent",
                     "opponent": opponent,
-                    "won": outcome.get("won"),
-                    "steps": outcome.get("steps"),
+                    "counted": outcome is not None,
+                    "won": outcome.get("won") if outcome else None,
+                    "steps": outcome.get("steps") if outcome else None,
+                    **replay_result(path),
                 }
-            )
-        print(f"[demo] {opponent}: {len(written)} replay(s) in {demo_dir}")
+                if record["counted"] and record["side"] == "agent":
+                    transcript = write_log_view(path, demo_dir / f"{tag}-transcript.html")
+                    if transcript:
+                        record["transcript"] = str(transcript)
+                replays.append(record)
+        counted = len(by_tag)
+        stray = len(grouped) - counted
+        # the environment accepts a fresh challenge the moment a battle ends, so one last battle can
+        # arrive between the final counted battle and vec_env.close() -- it ends in a forfeit. Say so
+        # instead of passing its replay off as one of the requested games.
+        print(
+            f"[demo] {opponent}: {counted} of {config.demo_battles} requested battle(s) counted, "
+            f"{len(written)} replay file(s) in {demo_dir}"
+            + (f" ({stray} unrequested battle(s) the env started as it closed)" if stray else "")
+        )
 
-    # deliberately NOT config.resolved_out(): that falls back to <run dir>/eval.json, so running a
-    # demo without --out would overwrite the pass-1 evaluation sitting next to the checkpoint
     demo_out = demo_out_path(config, demo_dir)
+    if not demo_out.exists():
+        print(
+            f"[demo] note: {demo_out} does not exist yet -- the demo keys are written there and a "
+            f"later pass-1 evaluation merges into the same file"
+        )
+    counted_battles = {entry["battle"] for entry in replays if entry["counted"]}
+    all_battles = {entry["battle"] for entry in replays}
     return write_payload(
         demo_out,
         {
@@ -461,9 +548,14 @@ def run_demo(config: EvalConfig) -> Path:
                 "battles": {opponent: config.demo_battles for opponent in config.demo_opponents},
                 "delay_s": config.demo_delay,
                 "directory": str(demo_dir),
+                "counted_battles": len(counted_battles),
+                "unrequested_battles": len(all_battles - counted_battles),
                 "replays": replays,
             },
-            "demo_replays": [entry["path"] for entry in replays],
+            # what the report links: the agent's own copy of every counted battle
+            "demo_replays": [
+                entry["path"] for entry in replays if entry["counted"] and entry["side"] == "agent"
+            ],
         },
     )
 
@@ -555,44 +647,81 @@ def write_summary(rows: Sequence[Dict[str, Any]], out_stem: Path, *, figure: boo
     return written
 
 
-def _summary_figure(rows: Sequence[Dict[str, Any]], out_stem: Path) -> Dict[str, Path]:
-    """Grouped bars with Wilson error bars -- seaborn PNG plus the plotly HTML twin."""
+def _figure_caption(frame: Any) -> Dict[str, str]:
+    """The title and subtitle shared by the seaborn and plotly twins.
+
+    The title names the metric and the opponents because a bare "Frozen-policy evaluation" leaves a
+    reader to reconstruct what is plotted from the legend.
+    """
+    opponents = ", ".join(sorted(frame["opponent"].unique()))
+    counts = sorted({count for count in frame["battles"].dropna().unique()})
+    n_note = f"n = {counts[0]:.0f} decided battles per bar" if len(counts) == 1 else "n varies per bar"
+    return {
+        "title": f"Frozen-policy evaluation — greedy masked policy vs {opponents}",
+        "subtitle": (
+            f"bars: win rate · whiskers: 95% Wilson interval · dashed line: 50% parity · {n_note}"
+        ),
+    }
+
+
+def eval_summary_figure(rows: Sequence[Dict[str, Any]]) -> Tuple[Any, Any, Any]:
+    """The seaborn panel, factored out as ``(figure, axis, frame)`` so tests can measure the layout.
+
+    Layout claims about a figure are cheap to make and expensive to be wrong about, so the legend is
+    required to clear the bars and the parity label by measurement (see tests/test_evaluate.py).
+    """
     import pandas as pd
-    import plotly.graph_objects as go
     import seaborn as sns
     from matplotlib import pyplot as plt
 
     frame = pd.DataFrame(rows)
     frame = frame[frame["win_rate_pct"].notna()]
-    if frame.empty:
-        return {}
     frame["run_opponent"] = frame["run"] + " · " + frame["opponent"]
     frame["error_low"] = frame["win_rate_pct"] - frame["ci_low"]
     frame["error_high"] = frame["ci_high"] - frame["win_rate_pct"]
 
-    written: Dict[str, Path] = {}
     sns.set_theme(style="whitegrid", context="talk")
     figure, axis = plt.subplots(figsize=(max(8.0, 1.4 * len(frame)), 6.4))
     palette = sns.color_palette("deep", n_colors=max(2, frame["opponent"].nunique()))
-    colours = {opponent: palette[index] for index, opponent in enumerate(sorted(frame["opponent"].unique()))}
+    colours = {
+        opponent: palette[index] for index, opponent in enumerate(sorted(frame["opponent"].unique()))
+    }
     for opponent, group in frame.groupby("opponent", sort=True):
         axis.bar(
             group["run_opponent"], group["win_rate_pct"], color=colours[opponent], label=opponent,
             yerr=[group["error_low"], group["error_high"]], capsize=4, error_kw={"linewidth": 1.4},
         )
     axis.axhline(50.0, color="0.4", linestyle=(0, (4, 3)), linewidth=1.3)
-    axis.annotate("parity (50%)", xy=(0.995, 50.0), xycoords=("axes fraction", "data"),
-                  ha="right", va="bottom", fontsize=10, color="0.35")
+    axis.annotate(
+        "parity (50%)", xy=(0.995, 50.0), xycoords=("axes fraction", "data"),
+        ha="right", va="bottom", fontsize=10, color="0.35",
+    )
     axis.set_ylabel("Win rate (%)")
+    axis.set_xlabel("run · opponent")
     axis.set_ylim(0.0, 105.0)
     axis.tick_params(axis="x", labelrotation=30)
-    axis.legend(title="opponent", loc="lower right", framealpha=0.95)
-    axis.set_title(
-        "Frozen-policy evaluation — greedy masked policy, 50% is parity\n"
-        "bars: win rate · whiskers: 95% Wilson interval",
-        fontsize=13,
+    # above the axes, not "lower right": the last group's bars are tall enough to sit under a legend
+    # in the corner, and covering a bar (or its whisker) is the one thing a legend must not do
+    axis.legend(
+        title="opponent", loc="lower left", bbox_to_anchor=(0.0, 1.0), ncol=2,
+        framealpha=0.95, borderaxespad=0.4,
     )
+    caption = _figure_caption(frame)
+    axis.set_title(f"{caption['title']}\n{caption['subtitle']}", fontsize=13)
     figure.tight_layout()
+    return figure, axis, frame
+
+
+def _summary_figure(rows: Sequence[Dict[str, Any]], out_stem: Path) -> Dict[str, Path]:
+    """Grouped bars with Wilson error bars -- seaborn PNG plus the plotly HTML twin."""
+    import plotly.graph_objects as go
+    from matplotlib import pyplot as plt
+
+    if not rows:
+        return {}
+    figure, _axis, frame = eval_summary_figure(rows)
+    caption = _figure_caption(frame)
+    written: Dict[str, Path] = {}
     written["png"] = out_stem.with_suffix(".png")
     figure.savefig(written["png"], dpi=150, bbox_inches="tight")
     plt.close(figure)
@@ -613,8 +742,11 @@ def _summary_figure(rows: Sequence[Dict[str, Any]], out_stem: Path) -> Dict[str,
                             annotation_text="parity (50%)")
     plotly_figure.update_layout(
         template="plotly_white", barmode="group", height=640,
-        title=dict(text="Frozen-policy evaluation — greedy masked policy (50% = parity)", x=0.02),
+        title=dict(
+            text=f"{caption['title']}<br><sub>{caption['subtitle']}</sub>", x=0.02,
+        ),
         yaxis=dict(title="Win rate (%)", range=[0, 105]),
+        xaxis=dict(title="run · opponent", tickangle=-30),
         legend=dict(title="opponent"),
     )
     written["html"] = out_stem.with_suffix(".html")

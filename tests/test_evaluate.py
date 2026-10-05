@@ -15,15 +15,20 @@ import pytest
 
 from lab_ca import evaluate as evaluate_module
 from lab_ca.evaluate import (
+    DEMO_AGENT_USERNAME,
+    DEMO_OPPONENT_USERNAME,
     EvalConfig,
     build_parser,
     choose_actions,
     demo_out_path,
+    group_replays,
+    replay_result,
     run_battles,
     spectate_url,
     summarize_evals,
     summarize_outcomes,
     wilson_interval,
+    write_log_view,
     write_payload,
     write_summary,
 )
@@ -199,18 +204,107 @@ def test_summarize_evals_and_summary_artifacts(tmp_path: Path) -> None:
     assert table.count("\n|") == 4  # header, separator, two rows
 
 
-def test_demo_output_never_defaults_to_the_pass1_eval_json(tmp_path: Path) -> None:
-    """A demo run without --out must not overwrite runs/<run>/eval.json."""
+def test_demo_writes_into_eval_json_and_merges_instead_of_clobbering(tmp_path: Path) -> None:
+    """The plan puts ``demo_replays`` in ``eval.json``; merging is what makes sharing it safe."""
     checkpoint = tmp_path / "runs" / "p3_400k" / "model_final.zip"
     demo_dir = checkpoint.parent / "demo"
     config = EvalConfig(checkpoint=str(checkpoint), demo=True)
+    target = checkpoint.parent / "eval.json"
+    assert demo_out_path(config, demo_dir) == target
 
-    # the hazard this guards: resolved_out() is where the pass-1 evaluation lives
-    assert config.resolved_out() == checkpoint.parent / "eval.json"
-    assert demo_out_path(config, demo_dir) == checkpoint.parent / "demo.json"
+    # a pass-1 evaluation is already sitting there
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(
+        json.dumps({"results": {"heuristic": {"win_rate_pct": 83.0}}}), encoding="utf-8"
+    )
+    write_payload(target, {"demo_replays": ["a.html"]})
+    merged = json.loads(target.read_text(encoding="utf-8"))
+    assert merged["results"]["heuristic"]["win_rate_pct"] == 83.0
+    assert merged["demo_replays"] == ["a.html"]
 
     explicit = EvalConfig(checkpoint=str(checkpoint), demo=True, out=str(tmp_path / "custom.json"))
     assert demo_out_path(explicit, demo_dir) == tmp_path / "custom.json"
+
+
+def test_replays_group_by_battle_tag_and_report_their_own_winner(tmp_path: Path) -> None:
+    """Both sides write a file, and the result is read from the file rather than from write order."""
+    demo_dir = tmp_path / "demo"
+    demo_dir.mkdir()
+    win_line = "|win|" + DEMO_AGENT_USERNAME
+    (demo_dir / f"{DEMO_AGENT_USERNAME} - battle-gen9customgame-1.html").write_text(
+        f"<html>{win_line}</html>", encoding="utf-8"
+    )
+    (demo_dir / f"{DEMO_OPPONENT_USERNAME} - battle-gen9customgame-1.html").write_text(
+        f"<html>{win_line}</html>", encoding="utf-8"
+    )
+    (demo_dir / f"{DEMO_AGENT_USERNAME} - battle-gen9customgame-2.html").write_text(
+        f"<html>|forfeit||win|{DEMO_OPPONENT_USERNAME}</html>", encoding="utf-8"
+    )
+
+    grouped = group_replays(sorted(demo_dir.glob("*.html")))
+    assert sorted(grouped) == ["battle-gen9customgame-1", "battle-gen9customgame-2"]
+    assert len(grouped["battle-gen9customgame-1"]) == 2  # agent copy + opponent copy
+
+    agent_copy = demo_dir / f"{DEMO_AGENT_USERNAME} - battle-gen9customgame-1.html"
+    assert replay_result(agent_copy) == {"winner": DEMO_AGENT_USERNAME, "forfeit": False}
+    stray = demo_dir / f"{DEMO_AGENT_USERNAME} - battle-gen9customgame-2.html"
+    assert replay_result(stray) == {"winner": DEMO_OPPONENT_USERNAME, "forfeit": True}
+
+
+def test_log_view_extracts_the_embedded_protocol_log(tmp_path: Path) -> None:
+    """The replay renders via the public client's JS, so the transcript is the offline view."""
+    replay = tmp_path / f"{DEMO_AGENT_USERNAME} - battle-gen9customgame-3.html"
+    replay.write_text(
+        '<script type="text/plain" class="battle-log-data">'
+        "|player|p1|lab_ca_dqn|\n|turn|1\n|move|p1a: Gholdengo|Shadow Ball|<b>not markup</b>\n"
+        "</script><script src='https://play.pokemonshowdown.com/js/replay-embed.js'></script>",
+        encoding="utf-8",
+    )
+    out = write_log_view(replay, tmp_path / "battle-3-transcript.html")
+    assert out is not None and out.exists()
+    text = out.read_text(encoding="utf-8")
+    assert "|turn|1" in text and "|move|p1a: Gholdengo|Shadow Ball|" in text
+    # protocol lines are shown literally, not interpreted as markup
+    assert "<b>not markup</b>" not in text and "&lt;b&gt;not markup&lt;/b&gt;" in text
+    assert "replay-embed.js" not in text  # no dependency on the public client
+
+    # a file without the log block is reported rather than written as an empty page
+    plain = tmp_path / "plain.html"
+    plain.write_text("<html>no log here</html>", encoding="utf-8")
+    assert write_log_view(plain, tmp_path / "nope.html") is None
+    assert not (tmp_path / "nope.html").exists()
+
+
+def test_summary_figure_layout_keeps_the_legend_off_the_bars() -> None:
+    """Measure the layout rather than trusting it: a legend covering a bar is a real defect."""
+    import matplotlib
+
+    matplotlib.use("Agg")
+    from matplotlib import pyplot as plt
+
+    rows = [
+        {"run": "eval_random_floor", "agent": "random", "opponent": "heuristic", "battles": 200,
+         "win_rate_pct": 0.0, "ci_low": 0.0, "ci_high": 1.9, "steps_mean": 26.6},
+        {"run": "eval_random_floor", "agent": "random", "opponent": "random", "battles": 200,
+         "win_rate_pct": 53.0, "ci_low": 46.1, "ci_high": 59.8, "steps_mean": 75.7},
+        {"run": "p3_400k", "agent": "dqn", "opponent": "heuristic", "battles": 200,
+         "win_rate_pct": 83.0, "ci_low": 77.2, "ci_high": 87.6, "steps_mean": 25.8},
+    ]
+    figure, axis, _frame = evaluate_module.eval_summary_figure(rows)
+    try:
+        assert axis.get_xlabel() == "run · opponent"
+        assert axis.get_ylabel() == "Win rate (%)"
+        assert "95% Wilson" in axis.get_title() and "50% parity" in axis.get_title()
+
+        figure.canvas.draw()
+        legend_box = axis.get_legend().get_window_extent()
+        for patch in axis.patches:
+            assert not legend_box.overlaps(patch.get_window_extent()), "legend covers a bar"
+        parity = [text for text in axis.texts if text.get_text().startswith("parity")]
+        assert parity, "the parity line needs a label"
+        assert not legend_box.overlaps(parity[0].get_window_extent())
+    finally:
+        plt.close(figure)
 
 
 @pytest.mark.integration
