@@ -156,6 +156,22 @@ Artifacts: `runs/sweep_notes.md` (full tables + caveats), `runs/sweep_aggregate.
 - New dependency: `scipy>=1.13` (statistics only — Welch tests in the sweep analysis and CIs in
   Phase 4; nothing in the training path imports it).
 
+### Phase 3, tier 1c — adopting B (and the bug that adoption exposed)
+
+- B is now the **code default** (`TrainingConfig`), so `python -m lab_ca.train` reproduces the
+  adopted config with no flags; the SB3 baseline stays reachable via the documented flag set.
+- **Bug found by reading the artifact back, not by reading the code:** `main()` builds the config
+  from `args.*`, and the argparse defaults were still arm A after the dataclass moved to arm B — so
+  a no-flag run trained **arm A** (recorded 0.25 updates/step, 239 fps) while the dataclass, README
+  and this plan all said arm B. The launch was killed at ~23 k steps, before producing anything
+  reportable; `run_config.json` is what caught it. Fixed by deriving every flag default from
+  `TrainingConfig()` (one source of truth) and pinned by two tests: CLI/dataclass parity
+  field-by-field, and a plain `--timesteps N --run-name X` run whose *effective* config must be B.
+  The sweep is unaffected — every sweep run passed its config explicitly.
+- 200 k-step run of B: `runs/p3_200k_2` (the `_2` is because `make_run_dir` never overwrites, and
+  the killed arm-A attempt had taken `runs/p3_200k`; that stale directory was deleted). Single
+  seed — the across-seed spread of arm B is already characterised at 100 k (10.5 pp).
+
 ## Phase 4 — Evaluation
 
 Checkpoint to evaluate: **arm B** (16× update budget, `[64,64]`, batch 128, target 1 000) is the
