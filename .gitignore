@@ -9,5 +9,8 @@ showdown/
 # Training artifacts (regenerable from scripts, not deliverable)
 runs/
 
+# Runtime logs (server output, training/eval console captures)
+logs/
+
 # OS / editor
 .DS_Store
