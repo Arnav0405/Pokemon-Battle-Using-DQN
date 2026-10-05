@@ -59,6 +59,47 @@ def test_default_config_is_the_adopted_arm_b() -> None:
     assert default.exploration_final_eps == 0.02
 
 
+def test_cli_defaults_come_from_the_dataclass() -> None:
+    """Every hyperparameter flag must default to ``TrainingConfig()`` -- one source of truth.
+
+    Regression: the adopted arm-B config was applied to the dataclass while the argparse defaults
+    stayed at arm A, so ``python -m lab_ca.train`` with no flags trained **arm A** even though the
+    dataclass, README and plan.md all said arm B. Pinning the parity is what stops a repeat.
+    """
+    args = train_module.build_parser().parse_args([])
+    default = TrainingConfig()
+    assert args.timesteps == default.timesteps
+    assert args.opponent == default.opponent
+    assert args.seed == default.seed
+    assert args.checkpoint_every == default.checkpoint_every_steps
+    assert args.train_freq == default.train_freq
+    assert args.gradient_steps == default.gradient_steps
+    assert args.batch_size == default.batch_size
+    assert args.buffer_size == default.buffer_size
+    assert args.learning_rate == default.learning_rate
+    assert args.gamma == default.gamma
+    assert args.target_update_interval == default.target_update_interval
+    assert args.exploration_fraction == default.exploration_fraction
+    assert args.exploration_final_eps == default.exploration_final_eps
+    assert args.net_arch == ",".join(str(width) for width in default.net_arch)
+
+
+def test_plain_cli_run_trains_the_adopted_config(monkeypatch) -> None:
+    """End-to-end guard: ``--timesteps N --run-name X`` and nothing else must mean arm B."""
+    captured = {}
+
+    def fake_train(config, runs_root=Path("runs")):
+        captured["config"] = config
+        return runs_root
+
+    monkeypatch.setattr(train_module, "train", fake_train)
+    assert train_module.main(["--timesteps", "10", "--run-name", "x"]) == 0
+    config = captured["config"]
+    assert config.updates_per_env_step() == 4.0
+    assert config.batch_size == 128
+    assert config.target_update_interval == 1_000
+
+
 @pytest.mark.integration
 def test_short_training_run_writes_the_contract(server: None, tmp_path: Path) -> None:
     run_dir = train(

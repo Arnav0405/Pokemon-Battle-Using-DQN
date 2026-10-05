@@ -250,24 +250,32 @@ def train(config: TrainingConfig, runs_root: Path = Path("runs")) -> Path:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--timesteps", type=int, default=2_000, help="env steps (= turns)")
-    parser.add_argument("--opponent", choices=OPPONENT_KINDS, default="heuristic")
-    parser.add_argument("--seed", type=int, default=0)
-    parser.add_argument("--run-name", default="", help="runs/<run-name> (default: timestamp)")
-    parser.add_argument("--checkpoint-every", type=int, default=1_000, help="steps")
+    # Hyperparameter flags default to TrainingConfig() itself -- one source of truth. Listing the
+    # defaults twice let the adopted config apply to the dataclass but not the CLI path, which
+    # launched an arm-A run from an "arm B adopted" tree.
+    defaults = TrainingConfig()
+    parser.add_argument("--timesteps", type=int, default=defaults.timesteps, help="env steps (= turns)")
+    parser.add_argument("--opponent", choices=OPPONENT_KINDS, default=defaults.opponent)
+    parser.add_argument("--seed", type=int, default=defaults.seed)
+    parser.add_argument("--run-name", default=defaults.run_name, help="runs/<run-name> (default: timestamp)")
+    parser.add_argument("--checkpoint-every", type=int, default=defaults.checkpoint_every_steps, help="steps")
     parser.add_argument("--runs-root", default="runs")
-    parser.add_argument("--device", default="cpu")
-    # Hyperparameter overrides. Defaults are the SB3 ones; the Phase-3 comparison runs set these.
-    parser.add_argument("--net-arch", default="64,64", help="Q-network hidden layers, e.g. 256,256")
-    parser.add_argument("--train-freq", type=int, default=4, help="env steps between updates")
-    parser.add_argument("--gradient-steps", type=int, default=1, help="updates per train_freq block")
-    parser.add_argument("--batch-size", type=int, default=32)
-    parser.add_argument("--buffer-size", type=int, default=1_000_000)
-    parser.add_argument("--learning-rate", type=float, default=1e-4)
-    parser.add_argument("--gamma", type=float, default=0.99)
-    parser.add_argument("--target-update-interval", type=int, default=10_000, help="env steps")
-    parser.add_argument("--exploration-fraction", type=float, default=0.1)
-    parser.add_argument("--exploration-final-eps", type=float, default=0.02)
+    parser.add_argument("--device", default=defaults.device)
+    # Hyperparameter overrides; see TrainingConfig for what the defaults are and why.
+    parser.add_argument("--net-arch", default=",".join(str(width) for width in defaults.net_arch),
+                        help="Q-network hidden layers, e.g. 256,256")
+    parser.add_argument("--train-freq", type=int, default=defaults.train_freq,
+                        help="env steps between updates")
+    parser.add_argument("--gradient-steps", type=int, default=defaults.gradient_steps,
+                        help="updates per train_freq block")
+    parser.add_argument("--batch-size", type=int, default=defaults.batch_size)
+    parser.add_argument("--buffer-size", type=int, default=defaults.buffer_size)
+    parser.add_argument("--learning-rate", type=float, default=defaults.learning_rate)
+    parser.add_argument("--gamma", type=float, default=defaults.gamma)
+    parser.add_argument("--target-update-interval", type=int, default=defaults.target_update_interval,
+                        help="env steps between target-net syncs")
+    parser.add_argument("--exploration-fraction", type=float, default=defaults.exploration_fraction)
+    parser.add_argument("--exploration-final-eps", type=float, default=defaults.exploration_final_eps)
     return parser
 
 
