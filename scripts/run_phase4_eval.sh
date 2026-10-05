@@ -9,16 +9,23 @@
 # the one Node server is the shared bottleneck, so stacking more parallelism would only make the
 # battles-per-second numbers incomparable and the server less stable.
 #
-# The server is the fragile part of this pipeline. Two failure modes were observed while building it,
-# both of which silently cost a whole evaluation:
-#   * the process dies outright -- its log ends in a Node cluster traceback, a worker restarting into
-#     an already-bound port being the usual cause -- after which every worker gets
-#     WinError 1225 ConnectionRefused;
-#   * the process stops answering HTTP while still holding the port, so "just start another one"
-#     crashes the new instance with EADDRINUSE.
-# So: probe the port before reacting, kill a stale listener before starting a fresh server, and retry
-# an evaluation that produced no eval.json. eval.json is written only after every opponent finished,
-# which makes its presence a reliable completion marker -- and makes this script resumable.
+# THIS SCRIPT DOES NOT TOUCH THE SERVER -- it verifies it and stops. An earlier version tried to be
+# self-healing (kill whatever holds port 8000, start a fresh server, retry). That was worse than the
+# problem: the server answers in milliseconds when it is up, so a single timed-out probe during a
+# busy or restarting moment is not evidence of death, and the reaction destroyed a healthy server
+# twice, turning a hiccup into a lost evaluation. Two real failure modes are worth knowing about,
+# both of which make every worker fail with WinError 1225 ConnectionRefused:
+#   * the process dies outright -- its log ends in a Node cluster traceback (a worker restarting into
+#     an already-bound port is the usual cause);
+#   * it answers nothing while still holding the port, so "start another one" only gives the new
+#     instance EADDRINUSE. Recover by hand: kill the process holding 8000, wait for the port to free,
+#     then start one server. Give a fresh cluster a full minute before judging it dead.
+# Start the server the documented way, from its own terminal:
+#
+#   bash scripts/showdown_start.sh --skip-build
+#
+# eval.json is written only after every opponent finished, so its presence is a reliable completion
+# marker: this script skips runs that already have one and can be resumed with the same command.
 set -uo pipefail
 
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
@@ -27,46 +34,28 @@ VP="${VP:-C:/Users/Arnav Waghdhare/Desktop/Arnav20/Coding/Python/l_lab/.venv/Scr
 
 BATTLES="${BATTLES:-200}"
 CONCURRENT="${CONCURRENT:-4}"
-ATTEMPTS="${ATTEMPTS:-3}"
-SERVER_LOG="logs/showdown_server.log"
+ATTEMPTS="${ATTEMPTS:-2}"
 
-server_up() { curl -s -o /dev/null --max-time 8 http://127.0.0.1:8000/; }
+# Curl note, and the reason the first version of this script kept "losing" the server:
+# `curl -s -o /dev/null` exits 23 (write error) in this environment even when the request returned a
+# clean 200 -- it writes the body to /dev/null through a code path MSYS reports as a failure. So
+# `curl -o /dev/null <url> && ...` is ALWAYS false here, and every check built on it declared a
+# healthy server dead (then killed it, or refused to start). Compare the status code instead.
+http_code() { curl -s -o /dev/null -w "%{http_code}" --max-time 10 http://127.0.0.1:8000/ 2>/dev/null; }
 
-# PIDs currently LISTENING on 8000 -- netstat -ano prints them in the last column.
-port_pids() {
-  netstat -ano 2>/dev/null | grep -E "[:.]8000[[:space:]].*LISTENING" | awk '{print $NF}' | sort -u
-}
-
-kill_listeners() {
-  local pid
-  for pid in $(port_pids); do
-    echo "[server] port 8000 still held by pid $pid -- killing it"
-    # single slashes: MSYS path conversion is disabled here, so //F reaches taskkill literally and is
-    # rejected as an invalid option
-    taskkill /F /PID "$pid" >/dev/null 2>&1 || true
+require_server() {
+  local _attempt
+  for _attempt in 1 2 3; do
+    [ "$(http_code)" = "200" ] && return 0
+    sleep 5
   done
-}
-
-ensure_server() {
-  server_up && return 0
-  kill_listeners
-  for _ in $(seq 1 20); do
-    [ -z "$(port_pids)" ] && break
-    sleep 1
-  done
-  # append, never truncate: a crash traceback in this file is the only evidence of why a run died
-  echo "=== server start $(date -u +%H:%M:%S) ===" >> "$SERVER_LOG"
-  nohup bash scripts/showdown_start.sh --skip-build >> "$SERVER_LOG" 2>&1 &
-  for _ in $(seq 1 45); do
-    sleep 2
-    server_up && { echo "[server] up"; return 0; }
-  done
-  echo "[server] would not come up within 90s; aborting" >&2
+  echo "server at 127.0.0.1:8000 is not answering (http_code=$(http_code))." >&2
+  echo "start it in its own terminal:  bash scripts/showdown_start.sh --skip-build" >&2
   return 1
 }
 
 echo "battles=$BATTLES per opponent, concurrent=$CONCURRENT envs"
-ensure_server || exit 1
+require_server || exit 2
 
 # arm A = SB3 defaults (the baseline the sweep rejected); arm B = the adopted config, at 100k
 # (3 seeds), 200k and 400k (the run that finally declared convergence). Arm C is not evaluated: it
@@ -90,12 +79,11 @@ for run in "${RUNS[@]}"; do
     continue
   fi
   for attempt in $(seq 1 "$ATTEMPTS"); do
-    ensure_server || exit 1
     echo "=== $run === (attempt $attempt/$ATTEMPTS)"
     "$VP" -u -m lab_ca.evaluate --checkpoint "$checkpoint" \
       --battles "$BATTLES" --concurrent "$CONCURRENT"
     [ -f "$out" ] && break
-    echo "=== $run === produced no eval.json; restarting the server and retrying"
+    echo "=== $run === produced no eval.json"
   done
   [ -f "$out" ] || echo "!!! $run FAILED after $ATTEMPTS attempts"
 done
@@ -105,12 +93,9 @@ echo "    random and clearly lose to the heuristic) ==="
 if [ -f runs/eval_random_floor.json ] && [ "${FORCE:-0}" != "1" ]; then
   echo "floor already evaluated (FORCE=1 to redo)"
 else
-  for attempt in $(seq 1 "$ATTEMPTS"); do
-    ensure_server || exit 1
-    "$VP" -u -m lab_ca.evaluate --agent random --out runs/eval_random_floor.json \
-      --battles "$BATTLES" --concurrent "$CONCURRENT"
-    [ -f runs/eval_random_floor.json ] && break
-  done
+  require_server || exit 2
+  "$VP" -u -m lab_ca.evaluate --agent random --out runs/eval_random_floor.json \
+    --battles "$BATTLES" --concurrent "$CONCURRENT"
 fi
 
 echo "=== summary table + figure ==="

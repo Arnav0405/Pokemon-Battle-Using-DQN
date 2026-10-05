@@ -18,6 +18,7 @@ from lab_ca.evaluate import (
     EvalConfig,
     build_parser,
     choose_actions,
+    demo_out_path,
     run_battles,
     spectate_url,
     summarize_evals,
@@ -196,6 +197,20 @@ def test_summarize_evals_and_summary_artifacts(tmp_path: Path) -> None:
     table = written["markdown"].read_text(encoding="utf-8")
     assert "p3_400k" in table and "81.0%" in table and "76.0-86.0" in table
     assert table.count("\n|") == 4  # header, separator, two rows
+
+
+def test_demo_output_never_defaults_to_the_pass1_eval_json(tmp_path: Path) -> None:
+    """A demo run without --out must not overwrite runs/<run>/eval.json."""
+    checkpoint = tmp_path / "runs" / "p3_400k" / "model_final.zip"
+    demo_dir = checkpoint.parent / "demo"
+    config = EvalConfig(checkpoint=str(checkpoint), demo=True)
+
+    # the hazard this guards: resolved_out() is where the pass-1 evaluation lives
+    assert config.resolved_out() == checkpoint.parent / "eval.json"
+    assert demo_out_path(config, demo_dir) == checkpoint.parent / "demo.json"
+
+    explicit = EvalConfig(checkpoint=str(checkpoint), demo=True, out=str(tmp_path / "custom.json"))
+    assert demo_out_path(explicit, demo_dir) == tmp_path / "custom.json"
 
 
 @pytest.mark.integration

@@ -397,6 +397,15 @@ def evaluate_checkpoint(config: EvalConfig) -> Path:
     return out_path
 
 
+def demo_out_path(config: "EvalConfig", demo_dir: Path) -> Path:
+    """Where the demo payload goes -- never the pass-1 ``eval.json`` next to the checkpoint.
+
+    ``EvalConfig.resolved_out()`` falls back to ``<run dir>/eval.json``, so a demo run without
+    ``--out`` would overwrite the evaluation that the report is built from.
+    """
+    return Path(config.out) if config.out else demo_dir.parent / "demo.json"
+
+
 def run_demo(config: EvalConfig) -> Path:
     """Pass 2: one battle at a time, replays saved locally, live spectate links printed."""
     checkpoint = Path(config.checkpoint)
@@ -442,8 +451,11 @@ def run_demo(config: EvalConfig) -> Path:
             )
         print(f"[demo] {opponent}: {len(written)} replay(s) in {demo_dir}")
 
+    # deliberately NOT config.resolved_out(): that falls back to <run dir>/eval.json, so running a
+    # demo without --out would overwrite the pass-1 evaluation sitting next to the checkpoint
+    demo_out = demo_out_path(config, demo_dir)
     return write_payload(
-        config.resolved_out(),
+        demo_out,
         {
             "demo": {
                 "battles": {opponent: config.demo_battles for opponent in config.demo_opponents},
