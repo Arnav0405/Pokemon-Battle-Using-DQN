@@ -32,23 +32,31 @@ def test_cli_flags_reach_the_training_config(monkeypatch) -> None:
     monkeypatch.setattr(train_module, "train", fake_train)
     exit_code = train_module.main([
         "--timesteps", "10", "--run-name", "x",
-        "--train-freq", "1", "--gradient-steps", "4", "--batch-size", "128",
-        "--target-update-interval", "1000", "--net-arch", "128,128",
+        # the SB3 baseline, so this also covers the documented way to reproduce arm A
+        "--train-freq", "4", "--gradient-steps", "1", "--batch-size", "32",
+        "--target-update-interval", "10000", "--net-arch", "128,128",
         "--exploration-fraction", "0.4", "--exploration-final-eps", "0.1",
     ])
     assert exit_code == 0
     config = captured["config"]
-    assert config.updates_per_env_step() == 4.0  # 16x the SB3 default of 0.25
-    assert config.batch_size == 128
-    assert config.target_update_interval == 1000
+    assert config.updates_per_env_step() == 0.25  # arm A: 1 update per 4 env steps
+    assert config.batch_size == 32
+    assert config.target_update_interval == 10_000
     assert config.net_arch == (128, 128)
     assert config.exploration_fraction == 0.4
     assert config.exploration_final_eps == 0.1
 
 
-def test_default_config_matches_sb3_defaults() -> None:
-    """The documented default is the SB3 default: 1 update per 4 env steps."""
-    assert TrainingConfig().updates_per_env_step() == 0.25
+def test_default_config_is_the_adopted_arm_b() -> None:
+    """The default must stay the config the sweep chose, or new runs silently fall back to arm A."""
+    default = TrainingConfig()
+    assert default.updates_per_env_step() == 4.0  # 16x SB3's 0.25
+    assert default.batch_size == 128
+    assert default.target_update_interval == 1_000
+    assert default.net_arch == (64, 64)
+    # exploration was left alone on purpose (it was never the binding constraint)
+    assert default.exploration_fraction == 0.1
+    assert default.exploration_final_eps == 0.02
 
 
 @pytest.mark.integration
@@ -60,11 +68,6 @@ def test_short_training_run_writes_the_contract(server: None, tmp_path: Path) ->
             seed=0,
             run_name="test_run",
             checkpoint_every_steps=200,
-            # a non-default update budget, so the plumbing is exercised on the real path too
-            train_freq=1,
-            gradient_steps=4,
-            batch_size=128,
-            target_update_interval=1000,
         ),
         runs_root=tmp_path,
     )
@@ -95,6 +98,7 @@ def test_short_training_run_writes_the_contract(server: None, tmp_path: Path) ->
     assert len(csv_lines) == len(rows) + 1, "CSV mirror and JSONL disagree on episode count"
 
     config = json.loads((run_dir / "run_config.json").read_text(encoding="utf-8"))["config"]
+    # the default path is the adopted arm B, and it must be recorded as such
     assert config["train_freq"] == 1
     assert config["gradient_steps"] == 4
     assert config["batch_size"] == 128

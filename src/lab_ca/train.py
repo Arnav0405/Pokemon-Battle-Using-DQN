@@ -110,7 +110,15 @@ class EpisodeMetricsCallback(BaseCallback):
 
 @dataclass
 class TrainingConfig:
-    """Everything that shapes a run -- dumped to ``run_config.json`` for the report."""
+    """Everything that shapes a run -- dumped to ``run_config.json`` for the report.
+
+    The defaults below are the **adopted Phase-3 config** (arm B of the seed sweep: 4 updates per
+    env step instead of SB3's 0.25, batch 128, target net refreshed every 1 000 steps). It beat the
+    SB3 defaults by +22.2 pp on the final-200 win rate with complete separation across 3 seeds each
+    (``runs/sweep_notes.md``), so new runs get it without flags. To reproduce the SB3 baseline
+    instead, pass ``--train-freq 4 --gradient-steps 1 --batch-size 32
+    --target-update-interval 10000``.
+    """
 
     timesteps: int = 2_000
     opponent: str = "heuristic"
@@ -119,20 +127,24 @@ class TrainingConfig:
     checkpoint_every_steps: int = 1_000
     device: str = "cpu"
 
-    # SB3 DQN hyperparameters. Spec §4: "start from SB3 defaults; tune only if curves are
-    # poor" -- these are exactly the SB3 2.9 defaults, written out so the run is documented.
+    # Adopted arm B (see the class docstring). One gradient update per env step x 4 = 16x the
+    # SB3 default's updates per env step; cheap because the loop is server-bound (5.29 ms/step vs
+    # 0.56 ms per update on this net).
     learning_rate: float = 1e-4
     buffer_size: int = 1_000_000
     learning_starts: int = 100
-    batch_size: int = 32
+    batch_size: int = 128
     gamma: float = 0.99
-    train_freq: int = 4
-    gradient_steps: int = 1
-    target_update_interval: int = 10_000
+    train_freq: int = 1
+    gradient_steps: int = 4
+    target_update_interval: int = 1_000
+    # Exploration is deliberately left at the SB3 defaults: measured on the baseline run, epsilon
+    # hit its floor at episode 376 of 3650 and the whole climb happened near-greedy, so exploration
+    # was never the binding constraint.
     exploration_fraction: float = 0.1
     exploration_initial_eps: float = 1.0
     exploration_final_eps: float = 0.02
-    net_arch: tuple = (64, 64)  # Q-network hidden layers; SB3's default for DQN
+    net_arch: tuple = (64, 64)  # Q-network hidden layers; capacity was tried and rejected
 
     def updates_per_env_step(self) -> float:
         """Gradient updates performed per environment step -- the knob this project tuned."""

@@ -36,8 +36,21 @@ uv run python -m lab_ca.train --timesteps 2000 --opponent heuristic
 ```
 
 Useful flags: `--opponent {heuristic,random}`, `--seed`, `--run-name`, `--checkpoint-every`,
-`--runs-root`. A 2000-step run takes ~10 s on a local server (~190 steps/s), so longer runs are
-cheap: `--timesteps 100000`.
+`--runs-root`. A 2000-step run takes ~10 s on a local server, so longer runs are cheap: at the
+adopted config ~110 steps/s, i.e. `--timesteps 100000` ≈ 15 min.
+
+**The defaults are the adopted Phase-3 config** (arm B of the seed sweep — 4 gradient updates per
+env step instead of SB3's 0.25, batch 128, target net refreshed every 1 000 steps). It beat the SB3
+defaults by +22.2 pp on the final-200 win rate, with complete separation across 3 seeds each
+(`runs/sweep_notes.md`). Hyperparameter flags (`--train-freq`, `--gradient-steps`, `--batch-size`,
+`--target-update-interval`, `--net-arch`, `--learning-rate`, `--gamma`, `--buffer-size`,
+`--exploration-fraction`, `--exploration-final-eps`) all default to that config; to reproduce the
+SB3 baseline instead:
+
+```bash
+uv run python -m lab_ca.train --timesteps 100000 --train-freq 4 --gradient-steps 1 \
+  --batch-size 32 --target-update-interval 10000
+```
 
 Each run writes to `runs/<run-name>/`:
 
@@ -50,6 +63,23 @@ Each run writes to `runs/<run-name>/`:
 | `train.log` | stdout of the run (SB3's progress tables) when you `tee` it yourself |
 
 `runs/` is gitignored: artifacts stay on disk for the report author, they are not committed.
+
+## Graphs and metrics
+
+`plots.py` renders from a run's `episodes.jsonl` (seaborn for the static PNG the report needs,
+plotly for a self-contained interactive HTML), and writes `metrics.json`:
+
+```bash
+uv run python -m lab_ca.plots --run runs/<run>                        # three-panel curve check
+uv run python -m lab_ca.plots --run runs/<run> --only success         # one panel
+uv run python -m lab_ca.plots --compare runs/<a> runs/<b>             # overlay runs (A/B read)
+uv run python -m lab_ca.plots --aggregate runs/<a> runs/<b> runs/<c>  # group by config, average seeds
+```
+
+Convergence is the first episode after which the 200-episode rolling win rate stays within `2σ` of
+its final value (band floor ±5 pp), and `metrics.json` also carries the late-trend slope so
+"plateaued" and "still climbing slowly" are distinguishable. `--aggregate` groups runs by the config
+recorded in their `run_config.json` and shades the min–max envelope across seeds.
 
 ## Tests
 
@@ -72,8 +102,10 @@ lab_ca/
 │   ├── env.py           # SinglesEnv subclass: embed_battle, shaped calc_reward, safe teardown
 │   ├── opponent.py      # scripted baselines (random, type-aware heuristic) on fixed teams
 │   ├── policy.py        # action masking for SB3 DQN (masked Q-networks + exploration)
-│   └── train.py         # DQN training loop, per-episode metric logging, checkpoints
+│   ├── train.py         # DQN training loop, per-episode metric logging, checkpoints
+│   └── plots.py         # curves/metrics.json: seaborn PNG, plotly HTML, compare/aggregate modes
 ├── tests/               # offline unit tests + server-backed integration tests
+├── spikes/              # throwaway probes with their measured conclusions (update cost, figure audit)
 ├── runs/                # training artifacts (gitignored)
 └── report_assets/       # final graphs + metrics.json for the report (Phase 5)
 ```
