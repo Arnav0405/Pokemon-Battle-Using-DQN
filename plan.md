@@ -8,8 +8,8 @@ Rule: tick a box only when its verification artifact exists on disk. Commit at p
 
 - [x] Toolchain installed: `showdown/` cloned (v0.11.11, `9fb3a5b`) + `npm install` + `node build`; `poke-env==0.16.1` pinned in `pyproject.toml`, installed into the `l_lab` uv-workspace venv (`../.venv`) on Python 3.13.7 — artifact: `scripts/showdown_setup.sh`, `pyproject.toml`
 - [x] Showdown server answers an HTTP probe on `127.0.0.1:8000` with `--no-security` — artifact: `scripts/showdown_start.sh` (verified: `http_code=200`), `scripts/patch_showdown_config.js`
-- [x] Two `RandomPlayer`s finish real battles over the local bridge, incl. concurrency scaling (1×: 1.37 s/battle, 3×: 0.53, 8×: 0.20) — artifact: `spikes/000-environment-smoke/smoke_battle.py` output
-- [x] Spike verdict + gotchas recorded (server parent dies without a TTY, orphan workers, `bindaddress` ignored, poke-env API deltas) — artifact: `spikes/000-environment-smoke/README.md`
+- [x] Two `RandomPlayer`s finish real battles over the local bridge, incl. concurrency scaling (1×: 1.37 s/battle, 3×: 0.53, 8×: 0.20) — evidence: `docs/poke-env-0.16.1-gotchas.md` (the probe itself, `spikes/000-environment-smoke/smoke_battle.py`, was deleted in the Phase-5 cleanup; these numbers are reproducible with two `RandomPlayer`s against a running server)
+- [x] Spike verdict + gotchas recorded (server parent dies without a TTY, orphan workers, `bindaddress` ignored, poke-env API deltas) — artifact: `docs/poke-env-0.16.1-gotchas.md` § "Server process and toolchain" (moved there from the deleted spike README in the Phase-5 cleanup)
 
 ## Spec deltas found in Phase 0 (spec §3/§4 predate the installed poke-env)
 
@@ -210,11 +210,9 @@ Two passes, because parallel metrics and watchable battles pull in opposite dire
 Replay attribution was fixed while doing this: the first version zipped a sorted file list against the outcome list, which attached a win to a different battle's replay and presented the stray third battle as part of the demo. Replays are now grouped by battle tag and their result is read out of the file itself (`|win|<username>`), which is checked in the payload against the counted outcome.
 
 
-## Phase 5 — Report assets
+## Phase 5 — Report assets — done
 
-- [ ] `src/lab_ca/plots.py` renders all three graphs + `metrics.json` — artifact: `report_assets/*.png`, `report_assets/metrics.json`
-  (module already written in Phase 3: `--out-dir report_assets` is all this needs; consider also
-  emitting the three curves as separate figures via `--only reward|success|steps`, plus their
-  `.html` twins)
-- [ ] Graph sanity pass (axes labelled, raw + smoothed, no truncated series) — artifact: review note
-- [ ] Cleanup pass: delete `spikes/000-environment-smoke/`, README documents reproducing a run — artifact: final commit
+- [x] `src/lab_ca/plots.py` renders all three graphs + `metrics.json` — artifact: `report_assets/curve_check.png/.html` (the adopted 400k run, three panels: reward, win rate, steps), `report_assets/{reward,success,steps}.png/.html` (the same curves as standalone panels, as the plan suggested), and `report_assets/metrics.json` (14,519 episodes, final-200 **81.0 %**, convergence at episode 13,781). Also in the folder, because the report needs them: `sweep_aggregate.png/.html/.json` (the arm decision, mean per config with the min–max envelope over 3 seeds each: **A 51.3 % / B 73.5 % / C 49.2 %**) and `phase4_eval.png/.html/.md` (the frozen-policy evaluation).
+- [x] Graph sanity pass (axes labelled, raw + smoothed, no truncated series) — artifact: `report_assets/SANITY.md` plus the mechanical check it reports, `spikes/005-report-asset-audit/audit_report_assets.py` — **52 checks, all passing**. It recomputes `metrics.json` from `episodes.jsonl` rather than trusting it, compares every drawn series against the run's own episode count (the "no truncation" requirement, made mechanical: all panels draw to 14,519 of 14,519), and measures each drawn CI/envelope off the artists, so a band that was never drawn cannot pass as "the seeds agree". Visual QA by a second model caught real defects in two of the three figures (legends over the data; a legend running into the title; an unlabelled zero line; "win rate" vs "success rate" in one figure); all fixed and re-verified — final verdicts: `curve_check` and `phase4_eval` **report-ready**, aggregate re-QA'd after the fixes.
+- [x] Cleanup pass: delete `spikes/000-environment-smoke/`, README documents reproducing a run — artifact: the spike is gone (its version pins and server findings moved into `docs/poke-env-0.16.1-gotchas.md`, and the spec's Phase 0 pointer now points there); `README.md` documents setup, a training run, the plotting commands and the test commands; `.gitignore` keeps `runs/` and `logs/` out of the repo.
+

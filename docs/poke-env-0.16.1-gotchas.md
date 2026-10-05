@@ -54,3 +54,35 @@ than a clean traceback. numpy `int64` (what SB3 emits) is fine. Our subclass coe
   environment action.
 - Battle end is signalled by a condition variable, not by the `battle_queue`, so draining that
   queue during teardown does not block the challenge from completing.
+
+## Server process and toolchain
+
+Phase 0's environment smoke test lived in `spikes/000-environment-smoke/` and was removed in the
+Phase 5 cleanup; its measurements and conclusions are here and in the spec's risk table.
+
+Pins the probe ran against (all still installed in `../.venv`):
+
+| Component | Version |
+|---|---|
+| OS / shell | Windows 11, git-bash (MSYS) |
+| Node.js | v22.23.3 (Showdown requires ≥ 22) |
+| pokemon-showdown | v0.11.11, commit `9fb3a5b`, cloned to `showdown/` (gitignored) |
+| poke-env | 0.16.1 |
+| gymnasium / pettingzoo / websockets / numpy | 1.3.0 / 1.27.0 / 16.1.1 / 2.5.3 |
+
+- **Start the server from an interactive terminal.** Launched from a non-interactive parent it
+  exits (code 1) right after spawning its worker, reporting `stdin is not a tty`. The **worker keeps
+  listening on 8000**, so battles still work and the failure is easy to miss; the parentless worker
+  then holds the port (`EADDRINUSE` on the next start). `train.py` and `evaluate.py` never spawn it.
+- **Orphans are killed by pid, not by hope:** `netstat -ano | grep :8000`, then
+  `taskkill /F /PID <pid>` — with **single** slashes. Path translation is off in this shell, so a
+  `//F` written for a POSIX-ish tool reaches `taskkill` literally, the kill fails, and the port
+  stays held.
+- **`bindaddress` in `config/config.js` is ignored in practice.** The loader returns `127.0.0.1`,
+  but the worker binds `0.0.0.0` (`Config.bindaddress || "0.0.0.0"` evaluated where the value is
+  missing). With `--no-security` the server is LAN-reachable, so run it only while training.
+- **`--skip-build` decides start-up cost:** ~30 s with `node build` versus ~2 s without.
+  `scripts/showdown_start.sh` keeps the build by default and takes `--skip-build`.
+- **Throughput scales with concurrency, not compute:** 4.56 s for 1 battle single-threaded,
+  0.53 s at 3×, **0.20 s at 8×** — so prefer `max_concurrent_battles` over a GPU. The evaluation
+  harness uses 4 (short runs of ~40 s keep a server restart cheap).

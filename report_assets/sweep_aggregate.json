@@ -1,0 +1,124 @@
+{
+  "configs": {
+    "0.25 upd/step \u00b7 arch [64,64] \u00b7 batch 32 \u00b7 target 10000 \u00b7 100k steps": {
+      "runs": [
+        "p3_100k",
+        "sweep_a_seed1",
+        "sweep_a_seed2"
+      ],
+      "seeds": [
+        0,
+        1,
+        2
+      ],
+      "seeds_per_config": 3,
+      "episodes": [
+        3650,
+        3478,
+        3515
+      ],
+      "final_window_success_rate_pct": {
+        "per_seed": [
+          57.49999999999999,
+          40.5,
+          56.00000000000001
+        ],
+        "mean": 51.333333333333336,
+        "min": 40.5,
+        "max": 57.49999999999999,
+        "spread": 16.999999999999993
+      },
+      "late_trend_pp_per_1000": {
+        "per_seed": [
+          7.696969696969689,
+          -8.59090909090909,
+          10.075757575757569
+        ],
+        "mean": 3.0606060606060566,
+        "min": -8.59090909090909,
+        "max": 10.075757575757569
+      }
+    },
+    "4 upd/step \u00b7 arch [256,256] \u00b7 batch 128 \u00b7 target 1000 \u00b7 100k steps": {
+      "runs": [
+        "sweep_c_seed0",
+        "sweep_c_seed1",
+        "sweep_c_seed2"
+      ],
+      "seeds": [
+        0,
+        1,
+        2
+      ],
+      "seeds_per_config": 3,
+      "episodes": [
+        3271,
+        3510,
+        3220
+      ],
+      "final_window_success_rate_pct": {
+        "per_seed": [
+          41.5,
+          78.5,
+          27.500000000000004
+        ],
+        "mean": 49.166666666666664,
+        "min": 27.500000000000004,
+        "max": 78.5,
+        "spread": 51.0
+      },
+      "late_trend_pp_per_1000": {
+        "per_seed": [
+          -12.33333333333332,
+          9.136363636363635,
+          -17.37878787878789
+        ],
+        "mean": -6.858585858585858,
+        "min": -17.37878787878789,
+        "max": 9.136363636363635
+      }
+    },
+    "4 upd/step \u00b7 arch [64,64] \u00b7 batch 128 \u00b7 target 1000 \u00b7 100k steps": {
+      "runs": [
+        "p3b_100k",
+        "sweep_b_seed1",
+        "sweep_b_seed2"
+      ],
+      "seeds": [
+        0,
+        1,
+        2
+      ],
+      "seeds_per_config": 3,
+      "episodes": [
+        4018,
+        4033,
+        3813
+      ],
+      "final_window_success_rate_pct": {
+        "per_seed": [
+          67.0,
+          77.5,
+          76.0
+        ],
+        "mean": 73.5,
+        "min": 67.0,
+        "max": 77.5,
+        "spread": 10.5
+      },
+      "late_trend_pp_per_1000": {
+        "per_seed": [
+          3.454545454545463,
+          -2.3787878787878665,
+          12.439393939393945
+        ],
+        "mean": 4.505050505050513,
+        "min": -2.3787878787878665,
+        "max": 12.439393939393945
+      }
+    }
+  },
+  "windows": {
+    "aggregate": 50
+  }
+}

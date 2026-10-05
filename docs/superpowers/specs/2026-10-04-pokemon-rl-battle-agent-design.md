@@ -135,7 +135,7 @@ These map 1:1 onto the report's required sections.
 ## 8. Phases
 
 **Phase 0 — Environment smoke test (spike, throwaway) — DONE**
-Install toolchain, clone + launch Showdown with `--no-security`, run two built-in `RandomPlayer`s for 1 battle. Goal: prove the server + poke-env bridge works on this machine before building anything. Result: PASS (24 battles at 8× concurrency, 0.20 s/battle). Evidence and gotchas: `spikes/000-environment-smoke/README.md`.
+Install toolchain, clone + launch Showdown with `--no-security`, run two built-in `RandomPlayer`s for 1 battle. Goal: prove the server + poke-env bridge works on this machine before building anything. Result: PASS (24 battles at 8× concurrency, 0.20 s/battle). Evidence and gotchas: `docs/poke-env-0.16.1-gotchas.md` (the `spikes/000-environment-smoke/` probe itself was deleted in the Phase 5 cleanup).
 
 **Phase 1 — Environment wrapper**
 `teams.py` (a canon fixed team), `env.py` (`embed_battle` + shaped `calc_reward`, action mask surfaced in the observation dict), `opponent.py` (Random + Heuristic with fixed team), all wired through `SingleAgentWrapper`. Verify a single training-style episode runs and returns sane reward/observation shapes.
@@ -176,3 +176,10 @@ Generate initial graphs from a partial training run; confirm reward rises and wi
 | "Start with the default embedding" (risk table) | no default exists — start with a small hand-written embedding |
 
 Also added: the masking decision (custom masked DQN policy), the measured concurrency throughput in the risk table, and the server-lifecycle risk discovered in Phase 0.
+
+**2026-10-05 — Phase 4 and Phase 5 deltas.**
+
+- *Phase 4 — the demo cannot be watched in a browser in this deployment.* §8 asks for a live-watchable demo and local replay capture. Local replay capture works (`save_replays` writes a self-contained HTML; no public upload). Live spectating does not: this checkout is the server package only — there is no client directory, and the page served at `/` is Showdown's stub, which rewrites the browser to `<host>.psim.us`, so a local battle URL lands on the *public* client's lobby. A saved replay's renderer likewise fetches `play.pokemonshowdown.com/js/replay-embed.js`. Substituted deliverable: each replay embeds its full protocol log, so the demo also writes a standalone transcript page per counted battle (move list + `|win|` line, no network). In-browser spectating would work against a server that ships the client; nothing else in the requirement changed.
+- *Phase 5 — observation.* §8's "no truncation" check is now a programmatic audit (`spikes/005-report-asset-audit/audit_report_assets.py`, 41 checks) rather than a human glance: `metrics.json` is recomputed from `episodes.jsonl`, every drawn series is compared against the run's own episode count, and each CI/envelope is measured off the drawn artists (a band that was never drawn has ~zero width and looks like "the seeds agree perfectly").
+- *Phase 5 — cleanup.* `spikes/000-environment-smoke/` removed; its version pins and server findings now live in `docs/poke-env-0.16.1-gotchas.md` (Phase 0's pointer updated above).
+- Arm C's single best seed (78.5 %) sits inside the adopted arm's range (worst seed 67.0 %), so "complete separation" is a claim about **arm A vs arm B** only; C is rejected for its 51 pp across-seed spread. The write-ups already read that way; the audit now pins both statements.

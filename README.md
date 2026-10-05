@@ -105,7 +105,8 @@ lab_ca/
 │   ├── train.py         # DQN training loop, per-episode metric logging, checkpoints
 │   └── plots.py         # curves/metrics.json: seaborn PNG, plotly HTML, compare/aggregate modes
 ├── tests/               # offline unit tests + server-backed integration tests
-├── spikes/              # throwaway probes with their measured conclusions (update cost, figure audit)
+├── spikes/              # throwaway probes with their measured conclusions (update cost, figure
+│                        # audit, sweep stats, budget scaling, report-asset audit)
 ├── runs/                # training artifacts (gitignored)
 └── report_assets/       # final graphs + metrics.json for the report (Phase 5)
 ```

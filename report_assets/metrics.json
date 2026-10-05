@@ -1,0 +1,30 @@
+{
+  "episodes": 14519,
+  "opponent": "heuristic",
+  "cumulative_reward": 245175.60900499998,
+  "average_reward": 16.886535505544458,
+  "success_rate": 0.673600110200427,
+  "final_window_success_rate": 0.81,
+  "early_window_success_rate": 0.02,
+  "late_window_success_rate": 0.8,
+  "performance_improvement": 0.78,
+  "average_steps_per_episode": 27.549555754528548,
+  "wins": 9780,
+  "losses": 4739,
+  "unfinished": 0,
+  "convergence_episode": 13781,
+  "convergence_band_pp": 5.547972602672078,
+  "trend_slope_pp_per_1000": 2.3030303030302957,
+  "trend_ci95_pp_per_1000": 3.2051409862851754,
+  "trend_blocks_used": 10,
+  "windows": {
+    "reward": 25,
+    "steps": 25,
+    "win_rate_plotted": 50,
+    "win_rate_convergence": 200,
+    "convergence_sigma_multiple": 2.0,
+    "trend": 2000,
+    "trend_block": 200,
+    "final": 200
+  }
+}

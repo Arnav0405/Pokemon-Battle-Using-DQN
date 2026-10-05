@@ -14,3 +14,11 @@ logs/
 
 # OS / editor
 .DS_Store
+
+# Interactive HTML twins of the report figures: each inlines plotly.js (~5 MB per file, ~31 MB for
+# the set), so they stay on disk as regenerable output rather than in the repo. One command each —
+# see report_assets/SANITY.md:
+#   python -m lab_ca.plots --run runs/p3_400k --out-dir report_assets            (curve_check.html)
+#   python -m lab_ca.evaluate --summarize runs/*/eval.json runs/eval_random_floor.json \
+#       --out report_assets/phase4_eval                                          (phase4_eval.html)
+report_assets/*.html

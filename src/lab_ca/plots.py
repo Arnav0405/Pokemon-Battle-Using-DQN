@@ -209,7 +209,7 @@ def _panel_specs(frame: pd.DataFrame, metrics: Dict[str, Any], which: str) -> Li
         "raw": 100.0 * frame["win"].astype(float),
         "raw_kind": "markers",
         "smooth": frame["win_rate"],
-        "label": "Success rate (%)",
+        "label": "Win rate (%)",
         "window": WIN_WINDOW,
         "color": "#55A868",
         "hline": (EVEN_MATCH_RATE, f"parity with {metrics['opponent']} ({EVEN_MATCH_RATE:.0f}%)"),
@@ -274,8 +274,8 @@ def seaborn_figure(frame: pd.DataFrame, metrics: Dict[str, Any], specs: List[Dic
     for axis, spec in zip(axes[:, 0], specs):
         if spec["raw"] is not None:
             if spec["raw_kind"] == "markers":
-                axis.scatter(frame["episode"], spec["raw"], color=spec["color"], alpha=0.24,
-                             s=13, linewidths=0, label="per episode (win / loss)")
+                axis.scatter(frame["episode"], spec["raw"], color=spec["color"], alpha=0.16,
+                             s=10, linewidths=0, label="per episode (win / loss)")
             else:
                 axis.plot(frame["episode"], spec["raw"], color=spec["color"], alpha=0.35,
                           linewidth=0.9, label="per episode")
@@ -285,7 +285,7 @@ def seaborn_figure(frame: pd.DataFrame, metrics: Dict[str, Any], specs: List[Dic
             half = _binomial_half_width(spec["smooth"], spec["window"])
             axis.fill_between(
                 frame["episode"], spec["smooth"] - half, spec["smooth"] + half,
-                color=spec["color"], alpha=0.18, linewidth=0, label="±95% CI (binomial)",
+                color=spec["color"], alpha=0.26, linewidth=0, label="±95% CI (binomial)",
             )
         if spec["hline"] is not None:
             value, label = spec["hline"]
@@ -294,7 +294,10 @@ def seaborn_figure(frame: pd.DataFrame, metrics: Dict[str, Any], specs: List[Dic
             axis.axvline(convergence, color="#8172B3", linestyle="--", linewidth=1.4,
                          label=f"convergence (episode {convergence})")
         axis.set_ylabel(spec["label"])
-        axis.legend(loc="best", framealpha=0.92)
+        # outside the axes, not `loc="best"`: "best" steers clear of lines and patches but not of
+        # scatter collections, and a 14k-episode run fills every inside corner -- measured in the
+        # report-asset audit, where an inside legend overlapped the data on all three panels
+        axis.legend(loc="upper left", bbox_to_anchor=(1.01, 1.0), frameon=False, fontsize=9)
         axis.margins(x=0.01)
 
     axes[-1, 0].set_xlabel("Episode   (one battle ≈ 25 env steps)")
@@ -302,7 +305,7 @@ def seaborn_figure(frame: pd.DataFrame, metrics: Dict[str, Any], specs: List[Dic
         f"DQN vs {metrics['opponent']} — {frame.attrs.get('run', 'run')}\n{_summary_line(metrics)}",
         fontsize=14,
     )
-    figure.tight_layout(rect=(0, 0, 1, 0.95))
+    figure.tight_layout(rect=(0, 0, 0.84, 0.95))  # right margin is the legends' column
     return figure
 
 
@@ -443,8 +446,8 @@ def comparison_seaborn(series: "Dict[str, pd.DataFrame]", metrics: Dict[str, Dic
         axes[1].plot(frame["episode"], frame["reward_smooth"], color=color, linewidth=2.0, label=name)
 
     parity = axes[0].axhline(EVEN_MATCH_RATE, color="0.45", linestyle=(0, (4, 3)), linewidth=1.3)
-    axes[0].set_ylabel("Success rate (%)")
-    axes[1].axhline(0.0, color="0.45", linestyle=(0, (4, 3)), linewidth=1.3)
+    axes[0].set_ylabel("Win rate (%)")
+    zero = axes[1].axhline(0.0, color="0.45", linestyle=(0, (1, 3)), linewidth=1.3)
     axes[1].set_ylabel(f"Cumulative reward\n(moving average, window {REWARD_WINDOW})")
     axes[1].set_xlabel("Episode   (one battle ≈ 25 env steps)")
     for axis in axes:
@@ -452,12 +455,13 @@ def comparison_seaborn(series: "Dict[str, pd.DataFrame]", metrics: Dict[str, Dic
     # one shared legend *outside* the axes: the curves cross every corner of these panels, so any
     # in-axes legend ends up on top of data (both colors are shared by the two panels)
     figure.legend(
-        [*rate_handles, parity],
-        [*rate_labels, f"parity with the opponent ({EVEN_MATCH_RATE:.0f}%)"],
+        [*rate_handles, parity, zero],
+        [*rate_labels, f"parity with the opponent ({EVEN_MATCH_RATE:.0f}%)",
+         "zero reward (no better than chance)"],
         loc="upper center", bbox_to_anchor=(0.5, 0.885), ncol=3, framealpha=0.95, fontsize=10.5,
     )
     figure.suptitle(
-        "Run comparison — success rate (with ±95% binomial CI) and reward\n"
+        "Run comparison — win rate (with ±95% binomial CI) and reward\n"
         "overlapping bands mean the difference is not resolvable at this episode count",
         fontsize=13, y=0.98,
     )
@@ -469,7 +473,7 @@ def comparison_plotly(series: "Dict[str, pd.DataFrame]", metrics: Dict[str, Dict
     """Interactive twin of :func:`comparison_seaborn`."""
     figure = make_subplots(
         rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.08,
-        subplot_titles=("Success rate (%)", f"Cumulative reward (moving average, window {REWARD_WINDOW})"),
+        subplot_titles=("Win rate (%)", f"Cumulative reward (moving average, window {REWARD_WINDOW})"),
     )
     for index, (name, frame) in enumerate(series.items()):
         color = COMPARISON_COLORS[index % len(COMPARISON_COLORS)]
@@ -721,6 +725,7 @@ def _aggregate_legend(label: str, entry: Dict[str, Any], table: Dict[str, Any],
 
 
 X_END_RATIO = 0.8  # a "curves end here" mark needs a real gap, not a few percent of run-to-run spread
+EPISODE_SPREAD_RATIO = 1.08  # ends differ by >8%: explain it, even without a "gap" mark
 
 
 def _curve_end_note(series: Dict[str, Dict[str, Any]]) -> str:
@@ -736,6 +741,15 @@ def _curve_end_note(series: Dict[str, Dict[str, Any]]) -> str:
         budget = _signature_parts(shortest)[1] or shortest
         notes.append(f"the {budget} curves end at ≈{ends[shortest]:,.0f} battles (that config ran out "
                      f"of episodes); beyond that point the figure shows the longer run only")
+    elif len(ends) > 1 and max(ends.values()) > EPISODE_SPREAD_RATIO * min(ends.values()):
+        # the same step budget is a different number of episodes per config, because a config that
+        # takes longer per battle fits fewer battles into it. Curves therefore stop at different x
+        # without anything being truncated -- say so, since the difference is plainly visible
+        notes.append(
+            f"the curves end at different episode counts ({min(ends.values()):,.0f}–"
+            f"{max(ends.values()):,.0f}) at the same step budget: the configs differ in steps per "
+            f"battle, so the same number of steps is a different number of battles"
+        )
     if any(entry.get("seeds", 1) <= 1 for entry in series.values()):
         notes.append("a single-run curve has no seed variance behind it — treat its level as "
                      "indicative, not as a replicated mean")
@@ -799,12 +813,16 @@ def aggregate_seaborn(series: Dict[str, Dict[str, Any]], table: Dict[str, Any]) 
     parity = axes[0].axhline(EVEN_MATCH_RATE, color="0.45", linestyle=(0, (4, 3)), linewidth=1.3)
     handles.append(parity)
     labels.append(f"parity with the opponent ({EVEN_MATCH_RATE:.0f}%)")
+    # both reference lines carry a label: they share a dashed style, so an unlabelled zero line reads
+    # as a second parity line rather than as "no better than chance"
+    zero = axes[1].axhline(0.0, color="0.45", linestyle=(0, (1, 3)), linewidth=1.3)
+    handles.append(zero)
+    labels.append("zero reward (no better than chance)")
     marked = _mark_shortest_end(axes[0], series)
     if marked is not None:
         axes[1].axvline(marked, color="0.55", linestyle=(0, (2, 3)), linewidth=1.1)
-    axes[0].set_ylabel(f"Success rate (%)\n{AGGREGATE_WINDOW}-episode rolling mean")
+    axes[0].set_ylabel(f"Win rate (%)\n{AGGREGATE_WINDOW}-episode rolling mean")
     axes[0].set_ylim(-2.0, 102.0)  # fixed 0-100 so panels stay comparable across figures
-    axes[1].axhline(0.0, color="0.45", linestyle=(0, (4, 3)), linewidth=1.3)
     axes[1].set_ylabel(f"Cumulative reward\n{AGGREGATE_WINDOW}-episode rolling mean")
     axes[1].set_xlabel("Episode   (one battle ≈ 25 env steps)")
     for axis in axes:
@@ -812,18 +830,19 @@ def aggregate_seaborn(series: Dict[str, Dict[str, Any]], table: Dict[str, Any]) 
 
     # a tall legend (six groups) would run into the title in a single column, so wrap it
     columns = 1 if sum(label.count("\n") + 1 for label in labels) <= 6 else 2
-    figure.legend(handles, labels, loc="lower left", bbox_to_anchor=(0.008, 0.752),
+    figure.legend(handles, labels, loc="lower left", bbox_to_anchor=(0.008, 0.705),
                   ncol=columns, framealpha=0.95, fontsize=11.5)
     knobs_line = f"{shared}  ·  " if shared else ""
     lighter = " · single-run curves are drawn lighter" if any(
         entry.get("seeds", 1) <= 1 for entry in series.values()) else ""
     figure.suptitle(
-        "Training curves by config — mean over seeds (shaded band: min–max across seeds)\n"
+        "Training curves by config — mean over seeds (shaded band: min–max across seeds, a range "
+        "rather than a confidence interval)\n"
         f"{knobs_line}training-time win rate vs the scripted heuristic (moving policy, ε floor "
         f"0.02){lighter}",
         fontsize=13, y=0.98,
     )
-    figure.tight_layout(rect=(0, 0.05, 1, 0.74))
+    figure.tight_layout(rect=(0, 0.05, 1, 0.70))
     note = _curve_end_note(series)
     if note:
         figure.text(0.012, 0.022, note, fontsize=11, color="0.32", ha="left", va="bottom",
@@ -835,7 +854,7 @@ def aggregate_plotly(series: Dict[str, Dict[str, Any]], table: Dict[str, Any]) -
     """Interactive twin of :func:`aggregate_seaborn`."""
     figure = make_subplots(
         rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.08,
-        subplot_titles=("Success rate (%) — mean over seeds", "Cumulative reward — mean over seeds"),
+        subplot_titles=("Win rate (%) — mean over seeds", "Cumulative reward — mean over seeds"),
     )
     for index, (label, entry) in enumerate(series.items()):
         color = COMPARISON_COLORS[index % len(COMPARISON_COLORS)]
@@ -864,7 +883,9 @@ def aggregate_plotly(series: Dict[str, Dict[str, Any]], table: Dict[str, Any]) -
             )
     figure.add_hline(y=EVEN_MATCH_RATE, line=dict(color="#808080", width=1.4, dash="dash"),
                      annotation_text=f"parity ({EVEN_MATCH_RATE:.0f}%)", row=1, col=1)
-    figure.add_hline(y=0.0, line=dict(color="#808080", width=1.2, dash="dot"), row=2, col=1)
+    figure.add_hline(y=0.0, line=dict(color="#808080", width=1.2, dash="dot"), row=2, col=1,
+                     annotation_text="zero reward", annotation_position="bottom right",
+                     annotation_font_size=11)
     knobs_prefix = f"{_shared_knobs(series)} · " if _shared_knobs(series) else ""
     ends = {
         label: float(entry["episodes"][-1])
@@ -893,11 +914,14 @@ def aggregate_plotly(series: Dict[str, Dict[str, Any]], table: Dict[str, Any]) -
             x=0.02,
         ),
         margin=dict(l=80, r=30, t=120, b=110),
+        # horizontal legend between the title and the panels: the twin must not put it over the data
+        legend=dict(orientation="h", yanchor="bottom", y=1.04, xanchor="left", x=0.0,
+                    font=dict(size=11)),
     )
     figure.update_xaxes(showgrid=True, gridcolor=GRID_COLOR)
     figure.update_yaxes(showgrid=True, gridcolor=GRID_COLOR)
     figure.update_yaxes(range=[-2.0, 102.0], row=1, col=1)  # fixed 0-100 scale
-    figure.update_yaxes(title_text=f"Success rate (%)\n{AGGREGATE_WINDOW}-episode rolling mean",
+    figure.update_yaxes(title_text=f"Win rate (%)\n{AGGREGATE_WINDOW}-episode rolling mean",
                         row=1, col=1)
     figure.update_yaxes(title_text=f"Cumulative reward\n{AGGREGATE_WINDOW}-episode rolling mean",
                         row=2, col=1)
