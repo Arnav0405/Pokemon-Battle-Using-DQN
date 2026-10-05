@@ -303,9 +303,17 @@ def test_summary_figure_layout_keeps_the_legend_off_the_bars() -> None:
         assert sorted(values) == ["0.0%", "53.0%", "83.0%"], values
 
         figure.canvas.draw()
-        legend_box = axis.get_legend().get_window_extent()
+        assert figure.legends, "the figure needs a legend"
+        legend_box = figure.legends[0].get_window_extent()
+        assert legend_box.y0 >= 0.0, "a legend outside the canvas is a clipped legend"
         for patch in axis.patches:
             assert not legend_box.overlaps(patch.get_window_extent()), "legend covers a bar"
+        # the first version of this legend sat above the axes and collided with the title, and only a
+        # measured check catches that class of mistake
+        assert not legend_box.overlaps(axis.title.get_window_extent()), "legend covers the title"
+        assert not legend_box.overlaps(
+            axis.xaxis.label.get_window_extent()
+        ), "legend covers the x-axis label"
         parity = [text for text in axis.texts if text.get_text().startswith("parity")]
         assert parity, "the parity line needs a label"
         assert not legend_box.overlaps(parity[0].get_window_extent())

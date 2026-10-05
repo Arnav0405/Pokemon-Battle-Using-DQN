@@ -196,15 +196,19 @@ variance, not for mean.
 
 Two passes, because parallel metrics and watchable battles pull in opposite directions (you can't spectate 8 battles at once):
 
-**Pass 1 — metrics (parallel, unwatched)**
-- [ ] `src/lab_ca/evaluate.py`: load checkpoint, run N battles vs Random and vs Heuristic at `max_concurrent_battles=8`, aggregate win rates — artifact: `runs/<run>/eval.json`
-- [ ] Evaluation win rates clearly above the random baseline — artifact: `runs/<run>/eval.json`
+**Pass 1 — metrics (parallel, unwatched) — done**
+- [x] `src/lab_ca/evaluate.py`: load checkpoint, run N battles vs Random and vs Heuristic at `max_concurrent_battles=8`, aggregate win rates — artifact: `runs/<run>/eval.json` (nine files: the three arm-A seeds, the three arm-B seeds at 100k, B at 200k, B at 400k, and a random-policy floor row; every one records `git_commit 5bbca44`, `git_dirty false`, and the provenance of the training run the checkpoint came from)
+- [x] Evaluation win rates clearly above the random baseline — artifact: `runs/phase4_eval.md` + `runs/phase4_eval.png/.html` (200 decided battles per bar, Wilson 95% intervals). Frozen greedy policy vs the heuristic: arm A 48.5/51.5/64.0 (mean **54.7 %**), arm B at 100k 88.0/75.0/77.0 (mean **80.0 %**), B at 200k 84.0 %, **B at 400k 87.5 %**. The scripted-random floor scores **1.0 %** vs the heuristic and **49.0 %** vs random — the coin flip it has to be, which is what makes the rest of the column believable.
+  The frozen-policy evaluation reproduces the training-time arm ranking a third time: **arm A's best run (64.0 %) is below arm B's worst (75.0 %)** — no overlap at n=3 either way.
 
-**Pass 2 — watchable demo (sequential, recorded locally)**
-- [ ] Demo mode in `evaluate.py` (`--demo`): a handful of battles at `max_concurrent_battles=1` so exactly one battle is live at a time, `save_replays` enabled, recognizable agent username — artifact: `runs/<run>/demo/` replay files saved **locally** (no upload to the public replay service)
-- [ ] Live spectate path verified: with the demo running, the single in-progress battle is watchable at `http://localhost:8000` — artifact: note confirming spectate works against the local server
-- [ ] Local replay capture works against the `--no-security` server (verify whether the replay endpoint saves locally; if the hosted-upload path is unreachable, fall back to saving the battle log + a screen capture instead) — artifact: saved local replay/log file in `runs/<run>/demo/`
-- [ ] Replay file paths recorded into `eval.json` so the report links a few concrete example games — artifact: `runs/<run>/eval.json` gains a `demo_replays` list
+**Pass 2 — watchable demo (sequential, recorded locally) — done, with one substitution**
+- [x] Demo mode in `evaluate.py` (`--demo`): a handful of battles at `max_concurrent_battles=1` so exactly one battle is live at a time, `save_replays` enabled, recognizable agent username — artifact: `runs/p3_400k/demo/` replay files saved **locally** (no upload to the public replay service). Two requested battles were counted; a third, unrequested battle that the environment starts as it closes is flagged in the payload rather than passed off as part of the demo.
+- [ ] Live spectate path verified: with the demo running, the single in-progress battle is watchable at `http://localhost:8000` — **not achievable in this deployment, evidenced rather than assumed**: the checkout is the server package only (`showdown/` has no client directory) and the page served at the server root is Showdown's stub, which rewrites the browser to `<host>.psim.us` (the public client) — verified by loading `http://127.0.0.1:8000/<battle-tag>` and landing on the public client's lobby. The spectate URL is still printed by the demo (`http://localhost:8000/gen9customgame-…`) and would work against a server that ships the client. Substituted artifact: a self-contained transcript per counted battle (below), which is what makes a saved demo game actually watchable here.
+- [x] Local replay capture works against the `--no-security` server — artifact: `runs/p3_400k/demo/` replay HTML (full protocol log embedded, written by poke-env from locally tracked messages, no upload). Note on the fallback the plan allowed for: the replay's *rendering* fetches `play.pokemonshowdown.com/js/replay-embed.js`, i.e. the public client, so the demo also writes `runs/p3_400k/demo/battle-<tag>-transcript.html` — the embedded log as a standalone page (21 turns, 31 moves, `|win|lab_ca_dqn` for the first game; no network) plus `transcript_view.png`.
+- [x] Replay file paths recorded into `eval.json` so the report links a few concrete example games — artifact: `runs/p3_400k/eval.json` gains a `demo_replays` list (the agent's own copy of each counted battle) beside `demo.counted_battles`/`demo.unrequested_battles` and the other side's copy of each file.
+
+Replay attribution was fixed while doing this: the first version zipped a sorted file list against the outcome list, which attached a win to a different battle's replay and presented the stray third battle as part of the demo. Replays are now grouped by battle tag and their result is read out of the file itself (`|win|<username>`), which is checked in the payload against the counted outcome.
+
 
 ## Phase 5 — Report assets
 

@@ -715,15 +715,19 @@ def eval_summary_figure(rows: Sequence[Dict[str, Any]]) -> Tuple[Any, Any, Any]:
     axis.set_xlabel("run")
     axis.set_ylim(0.0, 105.0)
     axis.tick_params(axis="x")
-    # above the axes, not "lower right": the last group's bars are tall enough to sit under a legend
-    # in the corner, and covering a bar (or its whisker) is the one thing a legend must not do
-    axis.legend(
-        title="opponent", loc="lower left", bbox_to_anchor=(0.0, 1.0), ncol=2,
-        framealpha=0.95, borderaxespad=0.4,
-    )
     caption = _figure_caption(frame)
     axis.set_title(f"{caption['title']}\n{caption['subtitle']}", fontsize=13)
-    figure.tight_layout()
+    # The legend lives in a band reserved at the bottom of the figure, and below the axes rather
+    # than inside them: every bar is anchored at zero, so any position inside the axes covers some
+    # bar, and above the axes it collides with the title (both measured, see the layout test).
+    # tight_layout(rect=...) is what reserves the band; a legend placed outside the axes is invisible
+    # to plain tight_layout().
+    figure.tight_layout(rect=(0.0, 0.16, 1.0, 1.0))
+    handles, labels = axis.get_legend_handles_labels()
+    figure.legend(
+        handles, labels, title="opponent", loc="lower left", bbox_to_anchor=(0.01, 0.0),
+        ncol=len(opponents), frameon=False,
+    )
     return figure, axis, frame
 
 
@@ -764,7 +768,7 @@ def _summary_figure(rows: Sequence[Dict[str, Any]], out_stem: Path) -> Dict[str,
         ),
         yaxis=dict(title="Win rate (%)", range=[0, 105]),
         xaxis=dict(title="run", tickangle=-30),
-        legend=dict(title="opponent"),
+        legend=dict(title="opponent", orientation="h", yanchor="bottom", y=-0.32, xanchor="left", x=0),
     )
     written["html"] = out_stem.with_suffix(".html")
     plotly_figure.write_html(written["html"], include_plotlyjs=True)
