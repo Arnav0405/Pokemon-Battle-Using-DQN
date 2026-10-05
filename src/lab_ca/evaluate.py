@@ -681,25 +681,40 @@ def eval_summary_figure(rows: Sequence[Dict[str, Any]]) -> Tuple[Any, Any, Any]:
     frame["error_high"] = frame["ci_high"] - frame["win_rate_pct"]
 
     sns.set_theme(style="whitegrid", context="talk")
-    figure, axis = plt.subplots(figsize=(max(8.0, 1.4 * len(frame)), 6.4))
-    palette = sns.color_palette("deep", n_colors=max(2, frame["opponent"].nunique()))
-    colours = {
-        opponent: palette[index] for index, opponent in enumerate(sorted(frame["opponent"].unique()))
-    }
-    for opponent, group in frame.groupby("opponent", sort=True):
-        axis.bar(
-            group["run_opponent"], group["win_rate_pct"], color=colours[opponent], label=opponent,
-            yerr=[group["error_low"], group["error_high"]], capsize=4, error_kw={"linewidth": 1.4},
+    runs = sorted(frame["run"].unique())
+    opponents = sorted(frame["opponent"].unique())
+    figure, axis = plt.subplots(figsize=(max(8.0, 1.5 * len(runs)), 6.8))
+    palette = sns.color_palette("deep", n_colors=max(2, len(opponents)))
+    colours = {opponent: palette[index] for index, opponent in enumerate(opponents)}
+    # tick labels carry the run only: the opponent is what the colour means, and repeating it in
+    # every label both crowds the axis and duplicates the legend
+    width = 0.8 / max(1, len(opponents))
+    for index, opponent in enumerate(opponents):
+        group = frame[frame["opponent"] == opponent]
+        positions = np.array([runs.index(run) for run in group["run"]]) - 0.4 + width * (index + 0.5)
+        bars = axis.bar(
+            positions, group["win_rate_pct"], width=width, color=colours[opponent], label=opponent,
+            yerr=[group["error_low"], group["error_high"]], capsize=4,
+            error_kw={"linewidth": 1.4},
         )
-    axis.axhline(50.0, color="0.4", linestyle=(0, (4, 3)), linewidth=1.3)
+        for bar, rate, high in zip(bars, group["win_rate_pct"], group["ci_high"]):
+            # the value is on the bar because a near-zero result (the random floor vs the heuristic)
+            # is otherwise an invisible sliver that reads as a missing bar rather than a measured 1%
+            axis.annotate(
+                f"{rate:.1f}%", xy=(bar.get_x() + bar.get_width() / 2, max(high, rate)),
+                xytext=(0, 3), textcoords="offset points", ha="center", va="bottom", fontsize=9,
+                color="0.25",
+            )
+    axis.set_xticks(range(len(runs)), runs, rotation=30, ha="right")
+    axis.axhline(50.0, color="0.35", linestyle=(0, (4, 3)), linewidth=1.3)
     axis.annotate(
         "parity (50%)", xy=(0.995, 50.0), xycoords=("axes fraction", "data"),
-        ha="right", va="bottom", fontsize=10, color="0.35",
+        xytext=(0, 4), textcoords="offset points", ha="right", va="bottom", fontsize=10, color="0.2",
     )
     axis.set_ylabel("Win rate (%)")
-    axis.set_xlabel("run · opponent")
+    axis.set_xlabel("run")
     axis.set_ylim(0.0, 105.0)
-    axis.tick_params(axis="x", labelrotation=30)
+    axis.tick_params(axis="x")
     # above the axes, not "lower right": the last group's bars are tall enough to sit under a legend
     # in the corner, and covering a bar (or its whisker) is the one thing a legend must not do
     axis.legend(
@@ -730,12 +745,14 @@ def _summary_figure(rows: Sequence[Dict[str, Any]], out_stem: Path) -> Dict[str,
     for opponent, group in frame.groupby("opponent", sort=True):
         plotly_figure.add_trace(
             go.Bar(
-                x=group["run_opponent"], y=group["win_rate_pct"], name=opponent,
+                x=group["run"], y=group["win_rate_pct"], name=opponent,
+                text=[f"{rate:.1f}%" for rate in group["win_rate_pct"]],
+                textposition="outside",
                 error_y=dict(
                     type="data", symmetric=False,
                     array=group["error_high"].tolist(), arrayminus=group["error_low"].tolist(),
                 ),
-                hovertemplate="%{x}<br>%{y:.1f}%<extra>" + opponent + "</extra>",
+                hovertemplate="%{x} vs " + opponent + "<br>%{y:.1f}%<extra></extra>",
             )
         )
     plotly_figure.add_hline(y=50.0, line=dict(color="#808080", width=1.4, dash="dash"),
@@ -746,7 +763,7 @@ def _summary_figure(rows: Sequence[Dict[str, Any]], out_stem: Path) -> Dict[str,
             text=f"{caption['title']}<br><sub>{caption['subtitle']}</sub>", x=0.02,
         ),
         yaxis=dict(title="Win rate (%)", range=[0, 105]),
-        xaxis=dict(title="run · opponent", tickangle=-30),
+        xaxis=dict(title="run", tickangle=-30),
         legend=dict(title="opponent"),
     )
     written["html"] = out_stem.with_suffix(".html")

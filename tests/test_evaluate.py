@@ -292,9 +292,15 @@ def test_summary_figure_layout_keeps_the_legend_off_the_bars() -> None:
     ]
     figure, axis, _frame = evaluate_module.eval_summary_figure(rows)
     try:
-        assert axis.get_xlabel() == "run · opponent"
+        assert axis.get_xlabel() == "run"
         assert axis.get_ylabel() == "Win rate (%)"
         assert "95% Wilson" in axis.get_title() and "50% parity" in axis.get_title()
+        # short tick labels: the opponent is the hue, not part of every label
+        labels = [text.get_text() for text in axis.get_xticklabels()]
+        assert labels == ["eval_random_floor", "p3_400k"], labels
+        # every bar carries its value, so a near-zero bar cannot read as a missing one
+        values = [text.get_text() for text in axis.texts if text.get_text().endswith("%")]
+        assert sorted(values) == ["0.0%", "53.0%", "83.0%"], values
 
         figure.canvas.draw()
         legend_box = axis.get_legend().get_window_extent()
