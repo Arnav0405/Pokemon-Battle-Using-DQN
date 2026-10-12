@@ -95,6 +95,96 @@ Timid Nature
 # The one roster used by the agent and by both baselines (they mirror each other).
 CANON_TEAM_PACKED = ConstantTeambuilder(CANON_TEAM).packed_team
 
+# An alternative agent roster (Kanto-leaning six), for showing a different team against the same
+# opponent. Note what the embedding can and cannot see: Dragon Dance / Swords Dance / Calm Mind /
+# Soft-Boiled / Thunder Wave / Trick / Stealth Rock / Roost all have base power 0, so their move slots carry no identity -- see
+# lab_ca.env.embed_battle and spikes/007-team-swap/CONCLUSION.md. A frozen policy trained on the
+# canon mirror is not expected to play this team well; that is a measurement, not a bug.
+MIXED_TEAM = """Dragonite @ Heavy-Duty Boots
+Ability: Multiscale
+Level: 100
+Tera Type: Normal
+EVs: 252 Atk / 4 SpD / 252 Spe
+Adamant Nature
+- Dragon Dance
+- Extreme Speed
+- Earthquake
+- Ice Spinner
+
+Clefable @ Leftovers
+Ability: Magic Guard
+Level: 100
+Tera Type: Steel
+EVs: 252 HP / 252 Def / 4 SpD
+Bold Nature
+- Moonblast
+- Soft-Boiled
+- Calm Mind
+- Thunder Wave
+
+Kingambit @ Leftovers
+Ability: Supreme Overlord
+Level: 100
+Tera Type: Dark
+EVs: 252 HP / 252 Atk / 4 SpD
+Adamant Nature
+- Kowtow Cleave
+- Sucker Punch
+- Iron Head
+- Swords Dance
+
+Gholdengo @ Choice Scarf
+Ability: Good as Gold
+Level: 100
+Tera Type: Steel
+EVs: 4 HP / 252 SpA / 252 Spe
+Timid Nature
+- Make It Rain
+- Shadow Ball
+- Focus Blast
+- Trick
+
+Zapdos @ Heavy-Duty Boots
+Ability: Static
+Level: 100
+Tera Type: Flying
+EVs: 4 HP / 252 SpA / 252 Spe
+Timid Nature
+- Thunderbolt
+- Hurricane
+- Volt Switch
+- Roost
+
+Great Tusk @ Leftovers
+Ability: Protosynthesis
+Level: 100
+Tera Type: Ground
+EVs: 252 HP / 4 Atk / 252 Def
+Impish Nature
+- Earthquake
+- Rapid Spin
+- Ice Spinner
+- Stealth Rock
+"""
+
+# Registered team names, so a CLI flag can say "mixed" instead of echoing a whole team string.
+TEAM_REGISTRY = {"canon": CANON_TEAM, "mixed": MIXED_TEAM}
+
+
+def load_team(spec: str) -> str:
+    """Resolve a team spec to team text: a registry name, a file path, or inline team text.
+
+    Lets ``--agent-team``/``--opponent-team`` accept ``canon``, ``mixed``, ``/path/to/team.txt``,
+    or a team pasted straight onto the command line.
+    """
+    if spec in TEAM_REGISTRY:
+        return TEAM_REGISTRY[spec]
+    candidate = Path(spec)
+    if candidate.is_file():
+        return candidate.read_text(encoding="utf-8")
+    return spec
+
+
 
 def pack_team(team: str) -> str:
     """Return the packed form of a team (accepts import or packed text)."""

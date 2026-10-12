@@ -77,6 +77,33 @@ its final value (band floor ±5 pp), and `metrics.json` also carries the late-tr
 "plateaued" and "still climbing slowly" are distinguishable. `--aggregate` groups runs by the config
 recorded in their `run_config.json` and shades the min–max envelope across seeds.
 
+## Watching a fight
+
+This deployment has no browser client (the checkout is the server package only), so the live view is
+the terminal: `--demo-live` prints each turn as it happens, and `--demo-delay` sets the pace. Replays
+and standalone transcript pages are written alongside, offline-viewable.
+
+```bash
+VP="C:/Users/Arnav Waghdhare/Desktop/Arnav20/Coding/Python/l_lab/.venv/Scripts/python.exe"
+
+# live: your team vs the scripted baseline, turn by turn
+"$VP" -m lab_ca.evaluate --checkpoint runs/p3_400k/model_final.zip \
+  --demo --demo-battles 3 --demo-live --demo-delay 0.6 \
+  --agent-team mixed --opponent-team canon \
+  --demo-dir runs/agent_mixed_demo --out runs/agent_mixed_demo/eval.json
+```
+
+`--agent-team` / `--opponent-team` take a registered name (`canon`, `mixed` — see
+`lab_ca.teams.TEAM_REGISTRY`), a path to a team file, or inline team text. `--demo-dir` keeps a
+second demo from dropping replays into the directory the report already links.
+`--demo-opponent-name` sets the opponent's handle in the demo (default `RivalBlue`) — presentation
+only: the opponent is a scripted baseline, and the write-up should keep saying so.
+
+Two things to expect when the team changes: a policy trained on the canon mirror does **not**
+transfer (measured 90 % -> 0.5 %, see `spikes/007-team-swap/CONCLUSION.md`), and status/setup moves
+are invisible to the observation because `embed_battle` encodes moves by base power and type only.
+Retraining is the fix for the first; the second needs move identity in the observation.
+
 ## Tests
 
 ```bash
@@ -111,7 +138,7 @@ lab_ca/
 
 One battle = one episode; one turn = one step. `train.py` builds a `SingleAgentWrapper` (our
 learner on side 1, a scripted baseline on side 2) around `PokemonSinglesEnv`, and hands it to
-SB3's DQN. The observation is a dict — a 33-float state vector plus the legality mask — and
+SB3's DQN. The observation is a dict — a 37-float state vector plus the legality mask — and
 masking is enforced in two places: illegal actions score `-inf` in both Q-networks (so the greedy
 action *and* the TD target's `max` are masked), and any illegally sampled exploratory action is
 snapped onto a legal one before it reaches the replay buffer (`policy.py`).

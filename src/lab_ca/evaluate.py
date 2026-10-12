@@ -15,6 +15,15 @@ Pass 2 -- watchable demo (one battle at a time, replays saved locally):
 
     python -m lab_ca.evaluate --checkpoint runs/p3_400k/model_final.zip --demo --demo-battles 3
 
+Watch a fight turn by turn as it happens (this deployment has no browser client -- see
+``spikes/006-live-demo/CONCLUSION.md`` -- so the terminal is the live view):
+
+    python -m lab_ca.evaluate --checkpoint runs/p3_400k/model_final.zip --demo --demo-battles 2 \\
+        --demo-live --demo-delay 0.4 --agent-team mixed --opponent-team canon
+
+Both passes accept ``--agent-team``/``--opponent-team`` (a registered name from
+``lab_ca.teams.TEAM_REGISTRY``, a path to a team file, or inline team text).
+
 Summary across evaluated checkpoints (table + figure):
 
     python -m lab_ca.evaluate --summarize runs/p3_400k/eval.json runs/p3b_100k/eval.json \\
@@ -58,6 +67,7 @@ from stable_baselines3.common.vec_env import DummyVecEnv, SubprocVecEnv, VecEnv
 from lab_ca.env import make_env
 from lab_ca.opponent import OPPONENT_KINDS
 from lab_ca.policy import MaskedDQN, MaskedQNetwork
+from lab_ca.teams import CANON_TEAM, TEAM_REGISTRY, load_team
 from lab_ca.train import OutcomeWrapper
 
 AGENT_KINDS = ("dqn", "random")
@@ -67,8 +77,14 @@ AGENT_KINDS = ("dqn", "random")
 MAX_TURNS_PER_BATTLE = 300
 
 # Demo identities: recognizable in a spectate link and in the replay's title.
+#
+# The opponent's handle reads like a trainer because that is what the replay is showing a viewer --
+# a fight against a named opponent. It is still a scripted baseline, and the write-up must keep
+# saying so: a trainer-flavoured handle is presentation, not evidence of an in-game AI.
+# Overridable per run with --demo-opponent-name; the two handles must not be prefixes of each other,
+# because replays are attributed to a side by which handle their filename starts with.
 DEMO_AGENT_USERNAME = "lab_ca_dqn"
-DEMO_OPPONENT_USERNAME = "scripted_bot"
+DEMO_OPPONENT_USERNAME = "RivalBlue"
 
 
 def wilson_interval(successes: int, total: int, z: float = 1.96) -> Tuple[float, float]:
@@ -130,13 +146,19 @@ def _wrapped_env(
     save_replays: Any = False,
     agent_username: Optional[str] = None,
     opponent_username: Optional[str] = None,
+    agent_team: str = CANON_TEAM,
+    opponent_team: str = CANON_TEAM,
 ) -> gym.Env:
     """One monitored, outcome-annotated evaluation env.
 
     Module-level (not a closure) because ``SubprocVecEnv`` pickles this callable into the worker
     processes.
     """
-    kwargs: Dict[str, Any] = {"save_replays": save_replays}
+    kwargs: Dict[str, Any] = {
+        "save_replays": save_replays,
+        "agent_team": agent_team,
+        "opponent_team": opponent_team,
+    }
     if agent_username:
         kwargs["account_configuration1"] = AccountConfiguration(agent_username, None)
     if opponent_username:
@@ -152,6 +174,8 @@ def build_vec_env(
     agent_username: Optional[str] = None,
     opponent_username: Optional[str] = None,
     seed: int = 0,
+    agent_team: str = CANON_TEAM,
+    opponent_team: str = CANON_TEAM,
 ) -> VecEnv:
     """``concurrent`` independent single-battle envs (see the module docstring)."""
     if opponent not in OPPONENT_KINDS:
@@ -164,6 +188,8 @@ def build_vec_env(
         save_replays=save_replays,
         agent_username=agent_username,
         opponent_username=opponent_username,
+        agent_team=agent_team,
+        opponent_team=opponent_team,
     )
     vec_env: VecEnv = (
         SubprocVecEnv([factory] * concurrent) if concurrent > 1 else DummyVecEnv([factory])
@@ -283,6 +309,48 @@ def spectate_url(battle_tag: str) -> str:
     return f"{http_base}/{room}"
 
 
+# Protocol line types worth showing a human. ``|request|`` is deliberately absent: it is a full
+# battle-state JSON blob sent every turn, and it is most of the stream's bytes.
+LIVE_LINE_TYPES = frozenset({
+    "turn", "move", "switch", "drag", "faint",
+    "-damage", "-heal", "-status", "-curestatus", "-boost", "-unboost", "-setboost",
+    "-supereffective", "-resisted", "-crit", "-miss", "-immune", "-fail", "-activate",
+    "-start", "-end", "-sidestart", "-sideend", "-weather", "-fieldstart", "-prepare",
+    "cant", "win", "tie",
+})
+
+
+def find_battle(vec_env: VecEnv) -> Optional[Any]:
+    """The in-flight battle object, walking the same wrapper chain ``_live_battle_tag`` uses."""
+    env: Any = vec_env.envs[0] if hasattr(vec_env, "envs") else None
+    for _ in range(8):
+        if env is None:
+            return None
+        battle = getattr(env, "battle1", None)
+        if battle is not None:
+            return battle
+        env = getattr(env, "env", None)
+    return None
+
+
+def print_live_lines(battle: Optional[Any], seen: int) -> int:
+    """Print protocol lines this battle has received since ``seen``; return the new total.
+
+    ``AbstractBattle._replay_data`` is where poke-env appends every message as it arrives -- the same
+    list ``save_replay`` renders from -- so this is a genuine real-time view of the battle with no
+    client and no extra connection. It is a private attribute, hence ``getattr``: a poke-env bump
+    that renames it degrades to silence rather than crashing a demo.
+    """
+    data = getattr(battle, "_replay_data", None)
+    if data is None:
+        return seen
+    for split in list(data)[seen:]:
+        if len(split) > 1 and split[1] in LIVE_LINE_TYPES:
+            prefix = ">>>" if split[1] == "turn" else "   "
+            print(f"{prefix} " + "  ".join(part for part in split[1:] if part).strip())
+    return len(data)
+
+
 def _git(*args: str) -> str:
     try:
         return subprocess.run(["git", *args], capture_output=True, text=True, check=True).stdout.strip()
@@ -345,6 +413,57 @@ class EvalConfig:
     demo_battles: int = 3
     demo_opponents: tuple = ("heuristic",)
     demo_delay: float = 0.0
+    demo_live: bool = False
+    demo_dir: str = ""
+    demo_opponent_name: str = DEMO_OPPONENT_USERNAME
+    agent_team: str = "canon"
+    opponent_team: str = "canon"
+
+    def resolved_demo_opponent_name(self) -> str:
+        """The opponent's demo handle, guarded where a bad value would silently corrupt artifacts.
+
+        Sides are attributed by ``filename.startswith(DEMO_AGENT_USERNAME)`` and the replay filename
+        is ``"<handle> - <tag>.html"``, so a handle that starts with the agent's, contains a space,
+        or contains ``" - "`` mislabels or unparses every replay instead of failing.
+        """
+        name = self.demo_opponent_name or DEMO_OPPONENT_USERNAME
+        if not name or any(char.isspace() for char in name):
+            raise ValueError("--demo-opponent-name must be a single token with no spaces")
+        if " - " in name:
+            raise ValueError("--demo-opponent-name must not contain ' - ' (the replay filename split)")
+        if name.startswith(DEMO_AGENT_USERNAME):
+            raise ValueError(
+                f"--demo-opponent-name must not start with the agent handle {DEMO_AGENT_USERNAME!r}"
+                " -- that prefix is how a replay is attributed to a side"
+            )
+        return name
+
+    def resolved_demo_dir(self) -> Path:
+        """Where the demo's replays go: ``--demo-dir``, else ``demo/`` next to the checkpoint.
+
+        Overridable because a second demo with a different team would otherwise drop its replays
+        into the directory the report already links.
+        """
+        if self.demo_dir:
+            return Path(self.demo_dir)
+        return Path(self.checkpoint).parent / "demo"
+
+    def resolved_agent_team(self) -> str:
+        """The learner's team text (``agent_team`` as a registry name, path, or inline text)."""
+        return load_team(self.agent_team)
+
+    def resolved_opponent_team(self) -> str:
+        """The baseline's team text."""
+        return load_team(self.opponent_team)
+
+    def team_provenance(self) -> Dict[str, str]:
+        """Team specs for the payload: names stay readable, inline text is recorded as such."""
+        return {
+            "agent": self.agent_team if self.agent_team in TEAM_REGISTRY else "inline/custom",
+            "opponent": self.opponent_team if self.opponent_team in TEAM_REGISTRY else "inline/custom",
+            "agent_team_text": self.resolved_agent_team(),
+            "opponent_team_text": self.resolved_opponent_team(),
+        }
 
     def resolved_out(self) -> Path:
         """Where ``eval.json`` goes: next to the checkpoint, or an explicit ``--out``."""
@@ -363,7 +482,11 @@ def evaluate_checkpoint(config: EvalConfig) -> Path:
     results: Dict[str, Any] = {}
 
     for opponent in config.opponents:
-        vec_env = build_vec_env(opponent, config.concurrent, seed=config.seed)
+        vec_env = build_vec_env(
+            opponent, config.concurrent, seed=config.seed,
+            agent_team=config.resolved_agent_team(),
+            opponent_team=config.resolved_opponent_team(),
+        )
         try:
             model = None
             if config.agent == "dqn":
@@ -397,6 +520,7 @@ def evaluate_checkpoint(config: EvalConfig) -> Path:
         "agent": config.agent,
         "config": asdict(config),
         "results": results,
+        "teams": config.team_provenance(),
         "git_commit": _git("rev-parse", "HEAD"),
         "git_dirty": bool(_git("status", "--porcelain")),
         "python": platform.python_version(),
@@ -477,24 +601,31 @@ def write_log_view(replay_path: Path, out_path: Path) -> Optional[Path]:
 def run_demo(config: EvalConfig) -> Path:
     """Pass 2: one battle at a time, replays saved locally, live spectate links printed."""
     checkpoint = Path(config.checkpoint)
-    demo_dir = checkpoint.parent / "demo"
+    demo_dir = config.resolved_demo_dir()
     demo_dir.mkdir(parents=True, exist_ok=True)
     rng = np.random.default_rng(config.seed)
+    opponent_handle = config.resolved_demo_opponent_name()
     replays: List[Dict[str, Any]] = []
     announced: set = set()
+    live_seen = 0
 
     def _announce(vec_env: VecEnv, step: int) -> None:
+        nonlocal live_seen
         tag = _live_battle_tag(vec_env)
-        if not tag or tag in announced:
-            return
-        announced.add(tag)
-        print(f"[demo] battle live: {tag}\n[demo] spectate: {spectate_url(tag)}")
+        if tag and tag not in announced:
+            announced.add(tag)
+            print(f"[demo] battle live: {tag}\n[demo] spectate: {spectate_url(tag)}")
+            live_seen = 0  # a new battle: restart the line stream from its first message
+        if config.demo_live:
+            live_seen = print_live_lines(find_battle(vec_env), live_seen)
 
     for opponent in config.demo_opponents:
         vec_env = build_vec_env(
             opponent, 1, save_replays=str(demo_dir),
-            agent_username=DEMO_AGENT_USERNAME, opponent_username=DEMO_OPPONENT_USERNAME,
+            agent_username=DEMO_AGENT_USERNAME, opponent_username=opponent_handle,
             seed=config.seed,
+            agent_team=config.resolved_agent_team(),
+            opponent_team=config.resolved_opponent_team(),
         )
         before = set(demo_dir.glob("*.html"))
         try:
@@ -553,6 +684,8 @@ def run_demo(config: EvalConfig) -> Path:
                 "battles": {opponent: config.demo_battles for opponent in config.demo_opponents},
                 "delay_s": config.demo_delay,
                 "directory": str(demo_dir),
+                "teams": config.team_provenance(),
+                "handles": {"agent": DEMO_AGENT_USERNAME, "opponent": opponent_handle},
                 "counted_battles": len(counted_battles),
                 "unrequested_battles": len(all_battles - counted_battles),
                 "replays": replays,
@@ -806,6 +939,17 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--demo-opponents", default=",".join(defaults.demo_opponents))
     parser.add_argument("--demo-delay", type=float, default=defaults.demo_delay,
                         help="seconds per turn, so a battle can actually be watched")
+    parser.add_argument("--demo-live", action="store_true", default=defaults.demo_live,
+                        help="with --demo: print each turn as it happens (pair with --demo-delay)")
+    parser.add_argument("--demo-dir", default=defaults.demo_dir,
+                        help="where the demo writes replays (default: demo/ next to the checkpoint)")
+    parser.add_argument("--demo-opponent-name", default=defaults.demo_opponent_name,
+                        help=f"the opponent's handle in the demo (default: {DEMO_OPPONENT_USERNAME})")
+    parser.add_argument("--agent-team", default=defaults.agent_team,
+                        help="learner's team: a registered name (canon, mixed), a file path, or "
+                             "inline team text")
+    parser.add_argument("--opponent-team", default=defaults.opponent_team,
+                        help="baseline's team; same accepted forms as --agent-team")
     parser.add_argument("--summarize", nargs="*", default=None,
                         help="eval.json files/dirs/globs to tabulate and plot instead of evaluating")
     return parser
@@ -839,6 +983,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         demo_battles=args.demo_battles,
         demo_opponents=tuple(part.strip() for part in args.demo_opponents.split(",") if part.strip()),
         demo_delay=args.demo_delay,
+        demo_live=args.demo_live,
+        demo_dir=args.demo_dir,
+        demo_opponent_name=args.demo_opponent_name,
+        agent_team=args.agent_team,
+        opponent_team=args.opponent_team,
     )
     if config.agent == "dqn" and not config.checkpoint:
         print("[eval] --checkpoint is required unless --agent random (or --summarize)")
