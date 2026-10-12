@@ -4,10 +4,6 @@ A reinforcement-learning agent (Stable-Baselines3 DQN, with action masking) that
 1v1 singles battles on a **local** Pokémon Showdown server, plus the logged metrics and graphs
 an external report is written from. The repo produces **data and graphs**, not report prose.
 
-Design spec: [`docs/superpowers/specs/2026-10-04-pokemon-rl-battle-agent-design.md`](docs/superpowers/specs/2026-10-04-pokemon-rl-battle-agent-design.md)
-Execution plan / phase status: [`plan.md`](plan.md)
-poke-env 0.16.1 library edges we hit and worked around: [`docs/poke-env-0.16.1-gotchas.md`](docs/poke-env-0.16.1-gotchas.md)
-
 ## Setup
 
 ```bash
