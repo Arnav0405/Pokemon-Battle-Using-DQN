@@ -185,48 +185,60 @@ snapped onto a legal one before it reaches the replay buffer (`policy.py`).
 
 ## References
 
-The five papers the design decisions actually rest on. Each line says what it justifies here, so
-the report can cite them where they apply rather than as a general reading list.
+Papers and course reports that implement RL agents in **Pokémon Showdown / Pokémon battle
+environments specifically** — not general RL literature. Ordered by how directly each one maps onto a
+decision in this repo. Two of them (goldmark #1 and #2) are the same task as this project, run at a
+different scale, and are the closest thing to a direct precedent for it.
 
-1. **Mnih et al., "Human-level control through deep reinforcement learning," *Nature* 518, 2015.**
-   The DQN algorithm this repo uses, and the source of the defaults arm A reproduces (1M-transition
-   replay buffer, target network, ε-greedy decay). Arm A *is* this baseline; arm B keeps the
-   algorithm and changes only the update budget.
-2. **Huang & Ontañón, "A Closer Look at Invalid Action Masking in Policy Gradient Algorithms,"
-   FLAIRS 2022** ([arXiv:2006.14171](https://arxiv.org/abs/2006.14171)). The theoretical cover for
-   `policy.py`: masking is a state-dependent differentiable transform whose update is a valid policy
-   gradient, and it scales as the invalid-action space grows while *invalid-action penalties do not*
-   — penalties sometimes never reach the first reward. That failure mode is what the ~2 % early win
-   rate against the type-aware opponent would look like if illegal moves were priced instead of
-   masked. Also the source of the trap we avoid: naive masking (sample masked, backprop unmasked)
-   explodes PPO-KL.
-3. **Fedus et al., "Revisiting Fundamentals of Experience Replay," ICML 2020**
-   ([arXiv:2007.06700](https://arxiv.org/html/2007.06700v1)). Defines the replay ratio as gradient
-   updates per environment transition — the metric that separates our arms. DQN's canonical 0.25
-   (which SB3 ships) is a historical default rather than a tuned value, and replay ratio and capacity
-   are separable axes. Arm B raises the ratio to 4 for +22.2 pp; arm C raises capacity instead and
-   gains nothing.
-4. **Nikishin et al., "The Primacy Bias in Deep Reinforcement Learning," ICML 2022**
-   ([arXiv:2205.07802](https://arxiv.org/abs/2205.07802)). The best available explanation for arm C's
-   51 pp cross-seed spread and unchanged mean: agents overfit to early interactions, replay amplifies
-   the effect, and a **higher replay ratio makes it worse** — exactly the C configuration. Their fix
-   is cheap and applies directly (periodically re-initialize the last layers, keep the buffer), which
-   makes it the first experiment to run if the project is resumed.
-5. **Cobbe et al., "Quantifying Generalization in Reinforcement Learning," ICML 2019, with the
-   HackAtari follow-up ("Deep RL Agents are not even close to Human Intelligence,"
-   [arXiv:2505.21731](https://arxiv.org/abs/2505.21731)).** The brittleness result spike 007 measures
-   locally. Cobbe et al. show agents overfit even to very large training sets; HackAtari shows they
-   collapse on *simplified* variants, and that the failure is shortcut learning — "the right actions
-   for the wrong reasons." Our 90 % → 0.5 % on a team swap, with team strength worth only ~20 pp to a
-   scripted player, is the same pathology with a control that rules out the matchup explanation.
+1. **Grigsby, Xie, Sasek, Zheng & Zhu, "Human-Level Competitive Pokémon via Scalable Offline
+   Reinforcement Learning with Transformers," *Reinforcement Learning Journal* 6:2685–2719, 2025**
+   ([arXiv:2504.04395](https://arxiv.org/pdf/2504.04395v1), code: Metamon). The strongest
+   peer-reviewed result on this exact environment. Offline RL over a dataset of human Showdown
+   battles, with a transformer over tokenized battle state/action/reward; agents reach the top 10 %
+   of ladder players. **Why it matters here:** their observation is a tokenized battle log rather than
+   a hand-built vector, which is the documented escape from our 37-feature embedding and its
+   move-slot aliasing (spike 007). They also evaluate through **poke-env** against the same kind of
+   scripted baselines we use (`Random`, `MaxBP`, `SimpleHeuristicsPlayer`), so their heuristic
+   benchmark table is directly comparable with our numbers.
+2. **Kumar, Sinha et al., "AI Learns to Battle Pokémon"** ([ankitsinha.net/ai-learns](https://ankitsinha.net/ai-learns/)).
+   Trains **both DQN and PPO** in a Pokémon battle environment and reports **DQN 77.5 % / PPO 73.5 %**
+   win rate against the hardest rule-based opponent. **Why it matters here:** this is the closest
+   published head-to-head for our algorithm choice, and our 87.5 % frozen-policy figure sits in the
+   same regime. Their central ablation matches our reward design: with **victory reward only, DQN
+   barely beats random play; adding HP/faint terms transforms DQN's performance**. That is the
+   empirical justification for `calc_reward`'s `HP_VALUE=1.0` / `FAINTED_VALUE=2.0` / shaped
+   `VICTORY_VALUE=30.0` split rather than a terminal-only reward.
+3. **Zhang, "Deep Reinforcement Learning for Pokémon Battling"** (Purdue CS587 report,
+   [kevin-ys-zhang.github.io](https://kevin-ys-zhang.github.io/files/CS587_Project_Report.pdf)).
+   Implements REINFORCE, DQN, WoLF-GIGA and A2C in PyTorch against poke-env, and finds **DQN the
+   strongest of the four** — ~90 % against `RandomPlayer` where an earlier Q-learning agent
+   (Kalose et al.) reached ~70 %. Their state embedding is almost exactly our first two feature
+   groups: 4 base powers scaled by 1/100 with **-1 for status moves**, then 4 type effectivenesses.
+   That independently corroborates both our action space and the fact that a compact hand-built
+   embedding is sufficient for a strong result — and their write-up shows the same weakness we found,
+   in that the -1 encoding is what loses move identity.
+4. **Kalose, Kaya & Kim, "Optimal Battle Strategy in Pokémon using Reinforcement Learning"**
+   (Stanford AA228 course report, [web.stanford.edu](https://web.stanford.edu/class/aa228/reports/2018/final151.pdf)).
+   **Tabular Q-learning plus softmax exploration** via poke-env against Pokémon Showdown. Softmax
+   exploration beat ε-greedy (60 % → 65 % → 70 % against random over 5 k/20 k games). **Why it matters
+   here:** this is the tabular, single-agent ancestor of our setup, and it establishes the baseline
+   our DQN has to beat — it is also the reference the DQN work above is measured against. Useful in
+   the report as the "why a neural Q-function rather than a table" argument: their state space had to
+   be kept deliberately small precisely because tabular Q-values do not scale.
+5. **Pleines, Addis, Rubinstein, Zimmer, Preuss & Whidden, "Pokémon Red via Reinforcement Learning,"
+   IEEE Conference on Games (CoG) 2025** ([project site](https://drubinstein.github.io/pokerl/)).
+   **PPO** over a PyBoy-based Gym environment, <10M parameters, no pretraining, beating the game's
+   early-mid content. **Why it matters here:** it is the reference implementation for reward design in
+   a Pokémon environment, and its documented finding is that **reward bonuses get exploited in
+   unintended ways when tuned poorly** — a real reward-hacking failure, not a hypothetical. That is
+   the risk our shaped reward carries (HANDOFF §4.5 states it as "the policy partly optimizes the
+   shaping terms"), and this paper is the evidence for taking it seriously, together with
+   `reward_computing_helper`'s use as our shaping function.
 
-Papers that extend these, if the work continues rather than stopping at the report: **Metamon**
-([arXiv:2504.04395](https://arxiv.org/pdf/2504.04395v1), offline RL with transformers over tokenized
-battle logs — the escape from the hand-crafted 37-vector), **PokéLLMon** (arXiv:2402.01118, an LLM
-policy at human parity on Showdown), the **PokéAgent Challenge**
-([arXiv:2603.15563](https://arxiv.org/html/2603.15563v1), a 4M-battle dataset plus a
-Bradley–Terry rating harness for external validity), **SPEQ**
-([arXiv:2501.08669](https://arxiv.org/html/2501.08669v1), high-UTD performance at 40–99 % fewer
-gradient updates — the direct answer to arm B's 189 → 99 fps cost), and **"When Does Opponent
-Modeling Pay Off?"** ([arXiv:2610.18229](https://arxiv.org/abs/2610.18229), opponent-intent inference
-fused into a dueling double DQN, which removes the degenerate-seed collapse plain DQN shows).
+Also in this environment, for the report's "related work / why not X" section: **PokéLLMon**
+([arXiv:2402.01118](https://arxiv.org/html/2402.01118v1), an LLM policy at human parity on Showdown),
+**PokéChamp** ([arXiv:2503.04094](https://arxiv.org/html/2503.04094v1), LLM-powered minimax, 84 % vs
+the strongest rule-based bot, plus a 3M-game human battle dataset), the **PokéAgent Challenge**
+([arXiv:2603.15563](https://arxiv.org/html/2603.15563v1), standardized RL baselines and a
+Bradley–Terry leaderboard for external validity), and **Wang's MIT thesis** (PPO + MCTS + self-play,
+1693 Elo, rank 8 on the gen4randombattle ladder).
